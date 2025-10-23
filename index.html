@@ -1,0 +1,834 @@
+
+<!DOCTYPE html>
+<html lang="zh-TW">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>設計需求單產生器</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              'brand-blue': '#005f73',
+              'brand-cyan': '#0a9396',
+              'brand-teal': '#94d2bd',
+              'brand-sand': '#e9d8a6',
+              'brand-orange': '#ee9b00',
+              'brand-red': '#ca6702',
+              'brand-rust': '#bb3e03',
+              'brand-maroon': '#ae2012',
+              'brand-dark': '#001219',
+            }
+          }
+        }
+      }
+    </script>
+
+    <!-- Babel for JSX & TS Transpilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+    <!-- PptxGenJS -->
+    <script src="https://unpkg.com/pptxgenjs@3.12.0/dist/pptxgen.min.js"></script>
+
+  <link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-gray-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      // All React components and logic are contained within this script tag.
+      // Babel will transpile it in the browser.
+
+      // --- Start of types.ts content ---
+      const DesignRequestType = {
+        ProductPackaging: '產品包裝',
+        LabelDesign: '貼標設計',
+        PrintedLightbox: '印刷物(燈箱, 跳卡, 名片等)',
+        PrintedDM: '印刷物(DM, 公告等)',
+        PrintedCatalog: '印刷物(型錄, 年曆等)',
+        OnlineLandingPage: '電商平面設計(Landing Page, 品牌旗艦店)',
+        OnlineProductPage: '電商平面設計(產品說明頁, A+圖, Banner)',
+        OnlineListingImage: '電商平面設計(上架圖)',
+        OnlineSocial: '社群貼文(含廣告素材)(FB, IG, LINE)',
+        PetFairGraphics: '寵物展平面輸出(價格牌, 大圖)',
+        PetFairMerch: '寵物展活動用品(提袋, 轉盤)',
+        Other: '其他',
+      };
+
+      const UrgencyType = {
+        New: '新品新增',
+        Modification: '舊品修改',
+      };
+
+      const UrgencyLevel = {
+        Normal: '一般件',
+        Urgent: '急件',
+      };
+
+      const NOTIFY_PARTIES_LIST = [
+          '資材部',
+          '產品部',
+          '申請人',
+          '業務單位',
+          '行銷部',
+          '品保部',
+          '研發部',
+          '其他'
+      ];
+
+      const LABEL_TYPES = ['正標', '背標', '罐標', '桶標', '其他'];
+
+      const BRAND_OPTIONS = ['赫緻 Herz', '活力零食 GooToE', '艾富鮮 AFreschi', '關健時刻 HealthyMoment', '每朝元氣 VITADAY', '開心狗 K.C.Dog', '紅布朗 HOMURUN', '貓戀人 Honey Cat', '其他'];
+      const ORIGIN_OPTIONS = ['越南', '台灣', '柬埔寨', '日本', '美國', '其他'];
+      const SALES_UNIT_OPTIONS = ['美國', '台灣', '日本', '韓國', '香港', '新加坡', '加拿大', '其他'];
+      const PACKAGING_MATERIAL_OPTIONS = [
+          'TTS05背封袋 105*290mm',
+          'ATS01吊掛袋 120*330mm',
+          '水牛零食中袋190*250mm',
+          'AFK袋180*280mm',
+          'GL系列量販袋 260*320mm',
+          '其他'
+      ];
+
+      const URGENCY_TYPE_AVAILABILITY = {
+        [DesignRequestType.ProductPackaging]: [UrgencyType.New, UrgencyType.Modification],
+        [DesignRequestType.LabelDesign]: [UrgencyType.New, UrgencyType.Modification],
+        [DesignRequestType.PrintedLightbox]: [UrgencyType.New],
+        [DesignRequestType.PrintedDM]: [UrgencyType.New],
+        [DesignRequestType.PrintedCatalog]: [UrgencyType.New],
+        [DesignRequestType.OnlineLandingPage]: [UrgencyType.New, UrgencyType.Modification],
+        [DesignRequestType.OnlineProductPage]: [UrgencyType.New, UrgencyType.Modification],
+        [DesignRequestType.OnlineListingImage]: [UrgencyType.New, UrgencyType.Modification],
+        [DesignRequestType.OnlineSocial]: [UrgencyType.New],
+        [DesignRequestType.PetFairGraphics]: [UrgencyType.New, UrgencyType.Modification],
+        [DesignRequestType.PetFairMerch]: [UrgencyType.New, UrgencyType.Modification],
+        [DesignRequestType.Other]: [UrgencyType.New, UrgencyType.Modification],
+      };
+
+      const timeToDays = (time) => {
+          if (time.includes('個月')) return parseInt(time) * 30;
+          if (time.includes('週')) return parseInt(time) * 7;
+          if (time.includes('天')) return parseInt(time);
+          return 1;
+      };
+
+      const LEAD_TIMES = {
+        [DesignRequestType.ProductPackaging]: {
+          [UrgencyType.New]: { [UrgencyLevel.Normal]: timeToDays('2個月'), [UrgencyLevel.Urgent]: timeToDays('1個月') },
+          [UrgencyType.Modification]: { [UrgencyLevel.Normal]: timeToDays('2週'), [UrgencyLevel.Urgent]: timeToDays('1週') },
+        },
+        [DesignRequestType.LabelDesign]: {
+          [UrgencyType.New]: { [UrgencyLevel.Normal]: timeToDays('2週'), [UrgencyLevel.Urgent]: timeToDays('1週') },
+          [UrgencyType.Modification]: { [UrgencyLevel.Normal]: timeToDays('5天'), [UrgencyLevel.Urgent]: timeToDays('3天') },
+        },
+        [DesignRequestType.PrintedLightbox]: {
+          [UrgencyType.New]: { [UrgencyLevel.Normal]: timeToDays('3天'), [UrgencyLevel.Urgent]: timeToDays('2天') },
+        },
+        [DesignRequestType.PrintedDM]: {
+          [UrgencyType.New]: { [UrgencyLevel.Normal]: timeToDays('2週'), [UrgencyLevel.Urgent]: timeToDays('1週') },
+        },
+        [DesignRequestType.PrintedCatalog]: {
+          [UrgencyType.New]: { [UrgencyLevel.Normal]: timeToDays('2個月'), [UrgencyLevel.Urgent]: timeToDays('1個月') },
+        },
+        [DesignRequestType.OnlineLandingPage]: {
+          [UrgencyType.New]: { [UrgencyLevel.Normal]: timeToDays('1個月'), [UrgencyLevel.Urgent]: timeToDays('3週') },
+          [UrgencyType.Modification]: { [UrgencyLevel.Normal]: timeToDays('2週'), [UrgencyLevel.Urgent]: timeToDays('1週') },
+        },
+        [DesignRequestType.OnlineProductPage]: {
+          [UrgencyType.New]: { [UrgencyLevel.Normal]: timeToDays('3週'), [UrgencyLevel.Urgent]: timeToDays('1週') },
+          [UrgencyType.Modification]: { [UrgencyLevel.Normal]: timeToDays('1週'), [UrgencyLevel.Urgent]: timeToDays('3天') },
+        },
+        [DesignRequestType.OnlineListingImage]: {
+          [UrgencyType.New]: { [UrgencyLevel.Normal]: timeToDays('1週'), [UrgencyLevel.Urgent]: timeToDays('3天') },
+          [UrgencyType.Modification]: { [UrgencyLevel.Normal]: timeToDays('2天'), [UrgencyLevel.Urgent]: timeToDays('1天') },
+        },
+        [DesignRequestType.OnlineSocial]: {
+          [UrgencyType.New]: { [UrgencyLevel.Normal]: timeToDays('2週'), [UrgencyLevel.Urgent]: timeToDays('1週') },
+        },
+        [DesignRequestType.PetFairGraphics]: {
+          [UrgencyType.New]: { [UrgencyLevel.Normal]: timeToDays('2週'), [UrgencyLevel.Urgent]: timeToDays('1週') },
+          [UrgencyType.Modification]: { [UrgencyLevel.Normal]: timeToDays('3天'), [UrgencyLevel.Urgent]: timeToDays('2天') },
+        },
+        [DesignRequestType.PetFairMerch]: {
+          [UrgencyType.New]: { [UrgencyLevel.Normal]: timeToDays('1個月'), [UrgencyLevel.Urgent]: timeToDays('3週') },
+          [UrgencyType.Modification]: { [UrgencyLevel.Normal]: timeToDays('1週'), [UrgencyLevel.Urgent]: timeToDays('3天') },
+        },
+        [DesignRequestType.Other]: {
+            [UrgencyType.New]: { [UrgencyLevel.Normal]: 7, [UrgencyLevel.Urgent]: 3 },
+            [UrgencyType.Modification]: { [UrgencyLevel.Normal]: 7, [UrgencyLevel.Urgent]: 3 },
+        }
+      };
+      // --- End of types.ts content ---
+
+
+      // --- Start of services/powerpointService.ts content ---
+      const FONT_OPTIONS = { fontFace: 'Arial', lang: 'zh-CN', align: 'center', valign: 'middle' };
+      const TITLE_COLOR = '005f73';
+      const TEXT_COLOR = '001219';
+      const BORDER_STYLE = { pt: 1, color: 'c0c0c0' };
+      const CELL_STYLE_CENTERED = { ...FONT_OPTIONS };
+      const CELL_STYLE_HEADER = { ...FONT_OPTIONS, bold: true, fill: { color: 'e9d8a6' }};
+      const HIGHLIGHT_COLOR = 'd1e8e2';
+
+      const PROOFREADING_HIGHLIGHT_MAP = {
+          '設計師': ['品號', '條碼', '品名', '成份', '淨重', '效期/保存期限', '效期打印處', '版次', '品牌風格', '文案錯別字'],
+          '設計部內校': ['品號', '條碼', '品名', '成份', 'GA', '代謝能', '建議餵食量', 'AAFCO聲明', '保存方式', '換食指南', '淨重', '製造商', '進口商/經銷商', '注意事項', '責任險', 'QR code', '品牌風格', '文案錯別字'],
+          '申請人': ['品號', '品名', '淨重', '品牌風格', '文案錯別字'],
+          '業務單位': ['品號', '條碼', '品名', '保存方式', '淨重', '製造商', '進口商/經銷商', '文案錯別字'],
+          '行銷部': ['品名', 'QR code', '合規性', '品牌風格', '文案錯別字'],
+          '產品部': ['品號', '條碼', '品名', '成份', 'GA', '代謝能', '建議餵食量', 'AAFCO聲明', '保存方式', '換食指南', '淨重', '效期/保存期限', '效期打印處', '製造商', '進口商/經銷商', '注意事項', '責任險', 'QR code', '版次', '合規性', '品牌風格', '文案錯別字'],
+          '品保部': ['品號', '條碼', '品名', '成份', 'GA', '代謝能', '建議餵食量', '淨重', '效期/保存期限', '效期打印處', '版次', '合規性'],
+      };
+
+      const addSlide1 = (pres, data) => {
+          const slide = pres.addSlide();
+          slide.background = { color: 'f8f9fa' };
+
+          slide.addText('設計需求申請資料', {
+              x: 0, y: 0.3, w: '100%', h: 0.75,
+              fontSize: 32, bold: true, color: TITLE_COLOR, align: 'center',
+              fontFace: 'Arial', lang: 'zh-CN'
+          });
+
+          const requestTypeValue = data.requestType === DesignRequestType.Other && data.requestTypeOther
+            ? `${data.requestType}: ${data.requestTypeOther}`
+            : data.requestType;
+
+          const group1 = [
+              { label: '申請人:', value: data.applicant },
+              { label: '申請日期:', value: data.applicationDate },
+              { label: '預計交期:', value: data.expectedDeliveryDate },
+          ];
+
+          const group2 = [
+              { label: '設計需求種類:', value: requestTypeValue },
+          ];
+          if (data.requestType === DesignRequestType.LabelDesign) {
+              const selectedLabelTypes = Object.entries(data.labelType)
+                  .filter(([, isSelected]) => isSelected)
+                  .map(([type]) => {
+                      if (type === '其他' && data.labelTypeOther) {
+                          return `其他: ${data.labelTypeOther}`;
+                      }
+                      return type;
+                  });
+              if (selectedLabelTypes.length > 0) {
+                  group2.push({ label: '貼標種類:', value: selectedLabelTypes.join(', ') });
+              }
+          }
+          group2.push(
+            { label: '設計類型:', value: data.urgencyType },
+            { label: '緊急程度:', value: data.urgencyLevel }
+          );
+          
+          const brandValue = data.brand === '其他' && data.brandOther ? `其他: ${data.brandOther}` : data.brand;
+          const packagingMaterialValue = data.packagingMaterial === '其他' && data.packagingMaterialOther ? `其他: ${data.packagingMaterialOther}` : data.packagingMaterial;
+          const originValue = data.origin === '其他' && data.originOther ? `其他: ${data.originOther}` : data.origin;
+          const salesUnitValue = data.salesUnit === '其他' && data.salesUnitOther ? `其他: ${data.salesUnitOther}` : data.salesUnit;
+
+          const productNameLabel =
+            data.requestType === DesignRequestType.ProductPackaging || data.requestType === DesignRequestType.LabelDesign
+              ? '品名'
+              : '項目名稱';
+
+          const group3 = [
+            { label: '品牌:', value: brandValue },
+            { label: `${productNameLabel}:`, value: data.productName }
+          ];
+          if (data.requestType === DesignRequestType.ProductPackaging || data.requestType === DesignRequestType.LabelDesign) {
+              group3.push(
+                  { label: '品號:', value: data.productNumber || 'N/A' },
+                  { label: '包材(包含尺寸):', value: packagingMaterialValue || 'N/A' },
+                  { label: '產地:', value: originValue || 'N/A' },
+                  { label: '銷售國家:', value: salesUnitValue || 'N/A' }
+              );
+          }
+          group3.push({ label: '依據:', value: data.basis || 'N/A' });
+
+          const textOptions = { fontFace: 'Arial', lang: 'zh-CN', color: TEXT_COLOR };
+          const fieldHeight = 0.3;
+          const topPadding = 0.1;
+          const bottomPadding = 0.15;
+          const leftPadding = 0.2;
+          const boxWidth = 6.5;
+          const boxX = 0.5;
+          let currentY = 1.2;
+
+          const renderGroup = (fields) => {
+              const boxHeight = (fields.length * fieldHeight) + topPadding + bottomPadding;
+              slide.addShape(pres.shapes.RECTANGLE, {
+                  x: boxX, y: currentY, w: boxWidth, h: boxHeight,
+                  fill: { color: 'ffffff', transparency: 100 },
+                  line: { color: 'c0c0c0', width: 1 }
+              });
+
+              let fieldY = currentY + topPadding;
+              fields.forEach((field) => {
+                  slide.addText(`${field.label}`, { x: boxX + leftPadding, y: fieldY, w: 2.2, h: fieldHeight, fontSize: 14, bold: true, ...textOptions, align: 'left' });
+                  slide.addText(field.value, { x: boxX + leftPadding + 2.3, y: fieldY, w: boxWidth - (leftPadding * 2) - 2.3, h: fieldHeight, fontSize: 14, ...textOptions, align: 'left' });
+                  fieldY += fieldHeight;
+              });
+              
+              currentY += boxHeight + 0.15;
+          };
+          
+          renderGroup(group1);
+          renderGroup(group2);
+          renderGroup(group3);
+
+          currentY += 0.2;
+          slide.addText('備註:', { x: 0.5, y: currentY, w: 6.5, h: 0.4, fontSize: 14, bold: true, ...textOptions });
+          slide.addText(data.remarks, { x: 0.5, y: currentY + 0.4, w: 6.5, h: 2.5, fontSize: 12, border: BORDER_STYLE, ...textOptions, align: 'left', valign: 'top' });
+      };
+
+      const addSlide2 = (pres, data) => {
+          const slide = pres.addSlide();
+          slide.background = { color: 'f8f9fa' };
+
+          slide.addText('設計簽收與校稿確認', { x: 0, y: 0.3, w: '100%', h: 0.5, fontSize: 24, bold: true, color: TITLE_COLOR, align: 'center', fontFace: 'Arial', lang: 'zh-CN' });
+          
+          slide.addText('設計收到', { x: 0.5, y: 1.0, w: '90%', h: 0.5, fontSize: 16, bold: true, color: TEXT_COLOR, fontFace: 'Arial', lang: 'zh-CN' });
+          slide.addText('設計師: ____________________', { x: 1, y: 1.5, w: 5.5, h: 0.4, fontSize: 14, fontFace: 'Arial', lang: 'zh-CN' });
+          slide.addText('簽收日期: ____________________', { x: 1, y: 2.0, w: 5.5, h: 0.4, fontSize: 14, fontFace: 'Arial', lang: 'zh-CN' });
+          
+          slide.addText('校稿欄位', { x: 0.5, y: 2.7, w: '90%', h: 0.5, fontSize: 16, bold: true, color: TEXT_COLOR, fontFace: 'Arial', lang: 'zh-CN' });
+
+          let proofreaders;
+          const isProductRelated = data.requestType === DesignRequestType.ProductPackaging || data.requestType === DesignRequestType.LabelDesign;
+
+          if (isProductRelated) {
+              proofreaders = ['設計師', '設計部內校', '申請人', '行銷部', '產品部', '品保部'];
+              if (data.notifyParties['業務單位']) {
+                  const businessUnitLabel = data.salesUnitDetail
+                      ? `業務單位: ${data.salesUnitDetail}`
+                      : '業務單位';
+                  proofreaders.splice(3, 0, businessUnitLabel);
+              }
+          } else {
+              proofreaders = ['設計師', '申請人', '行銷部'];
+              if (data.notifyParties['業務單位']) {
+                  const businessUnitLabel = data.salesUnitDetail
+                      ? `業務單位: ${data.salesUnitDetail}`
+                      : '業務單位';
+                  proofreaders.splice(2, 0, businessUnitLabel);
+              }
+          }
+
+          const tableHeader = [[
+              { text: '校稿者', options: CELL_STYLE_HEADER },
+              { text: '簽名確認', options: CELL_STYLE_HEADER }
+          ]];
+          const tableRows = proofreaders.map(p => ([
+              { text: p, options: { ...CELL_STYLE_CENTERED, bold: true, align: 'center', fontFace: 'Arial', lang: 'zh-CN' } },
+              { text: '', options: CELL_STYLE_CENTERED }
+          ]));
+          
+          slide.addTable([...tableHeader, ...tableRows], { 
+              x: 0.5, y: 3.2, w: 6.5, 
+              colW: [2.0, 4.5], 
+              border: BORDER_STYLE, 
+              rowH: 0.59
+          });
+          
+          const finalApprovalY = 3.2 + (proofreaders.length + 1) * 0.59 + 0.5;
+          slide.addText('完稿確認', { x: 0.5, y: finalApprovalY, w: '90%', h: 0.5, fontSize: 16, bold: true, color: TEXT_COLOR, fontFace: 'Arial', lang: 'zh-CN' });
+          slide.addText('設計主管簽名: ____________________', { x: 1, y: finalApprovalY + 0.5, w: 5.5, h: 0.4, fontSize: 14, fontFace: 'Arial', lang: 'zh-CN' });
+      };
+
+      const addSlide3 = (pres) => {
+          const slide = pres.addSlide();
+          slide.background = { color: 'f8f9fa' };
+          
+          slide.addText('產品類設計校稿欄位', { x: 0, y: 0.2, w: '100%', h: 0.5, fontSize: 24, bold: true, color: TITLE_COLOR, align: 'center', fontFace: 'Arial', lang: 'zh-CN' });
+
+          const proofreaders = ['校稿項目', '設計師', '設計部內校', '申請人', '業務單位', '行銷部', '產品部', '品保部'];
+          const items = ['品號', '條碼', '品名', '成份', 'GA', '代謝能', '建議餵食量', 'AAFCO聲明', '保存方式', '換食指南', '淨重', '效期/保存期限', '效期打印處', '製造商', '進口商/經銷商', '注意事項', '責任險', 'QR code', '版次', '合規性', '品牌風格', '文案錯別字'];
+          
+          const tableHeader = proofreaders.map(p => ({ text: p, options: { ...CELL_STYLE_HEADER, fontSize: 10 } }));
+          
+          const proofreaderColumns = proofreaders.slice(1);
+
+          const tableRows = items.map(item => {
+              const row = [{ text: item, options: { ...CELL_STYLE_CENTERED, bold: true, fontSize: 9, align: 'left' } }];
+              
+              proofreaderColumns.forEach(proofreader => {
+                  const shouldHighlight = PROOFREADING_HIGHLIGHT_MAP[proofreader]?.includes(item);
+                  const cellOptions = { ...CELL_STYLE_CENTERED };
+                  if (shouldHighlight) {
+                      cellOptions.fill = { color: HIGHLIGHT_COLOR };
+                  }
+                  row.push({ text: '', options: cellOptions });
+              });
+
+              return row;
+          });
+          
+          const colWidths = [1.4, 0.8, 1.0, 0.8, 0.8, 0.8, 0.7, 0.7];
+          
+          slide.addTable([tableHeader, ...tableRows], { x: 0.25, y: 0.8, w: 7.0, colW: colWidths, border: BORDER_STYLE, rowH: 0.35 });
+      };
+
+      const addSlide4 = (pres, data) => {
+          const slide = pres.addSlide();
+          slide.background = { color: 'f8f9fa' };
+          
+          const contentStartY = 0.3; // Move everything up
+          
+          slide.addText('後續流程', { x: 0, y: contentStartY, w: '100%', h: 0.5, fontSize: 24, bold: true, color: TITLE_COLOR, align: 'center', fontFace: 'Arial', lang: 'zh-CN' });
+
+          let currentY = contentStartY + 0.8;
+
+          // --- 歸檔資訊 ---
+          slide.addText('歸檔資訊', { x: 0.5, y: currentY, w: '90%', h: 0.5, fontSize: 16, bold: true, color: TEXT_COLOR, fontFace: 'Arial', lang: 'zh-CN' });
+          currentY += 0.4;
+          slide.addShape(pres.shapes.RECTANGLE, { x: 0.75, y: currentY, w: 6.0, h: 2.8, line: { color: 'c0c0c0', width: 1 } });
+          slide.addText('歸檔日期: ____________________', { x: 1, y: currentY + 0.1, w: 5.5, h: 0.4, fontSize: 14, fontFace: 'Arial', lang: 'zh-CN' });
+          slide.addText('歸檔路徑:', { x: 1, y: currentY + 0.7, w: 5.5, h: 0.4, fontSize: 14, fontFace: 'Arial', lang: 'zh-CN' });
+          slide.addShape(pres.shapes.RECTANGLE, { x: 1, y: currentY + 1.1, w: 5.5, h: 1.5, fill: { color: 'ffffff' }, line: { color: 'c0c0c0', width: 1 } });
+          currentY += 2.8 + 0.2;
+
+          // --- 告知作業 ---
+          slide.addText('告知作業', { x: 0.5, y: currentY, w: '90%', h: 0.5, fontSize: 16, bold: true, color: TEXT_COLOR, fontFace: 'Arial', lang: 'zh-CN' });
+          currentY += 0.4;
+          
+          const selectedParties = Object.entries(data.notifyParties)
+              .filter(([, isSelected]) => isSelected)
+              .map(([party]) => {
+                  if (party === '業務單位' && data.salesUnitDetail) {
+                      return `業務單位: ${data.salesUnitDetail}`;
+                  }
+                  if (party === '其他' && data.notifyPartiesOther) {
+                      return `其他: ${data.notifyPartiesOther}`;
+                  }
+                  return party;
+              });
+
+          const boxStartY = currentY;
+          const contentElements = [];
+          let contentY = boxStartY + 0.1;
+
+          contentElements.push({ type: 'text', text: '告知人員:', options: { x: 1, y: contentY, w: 5.5, h: 0.4, fontSize: 14, bold: true, fontFace: 'Arial', lang: 'zh-CN' } });
+          contentY += 0.4;
+          
+          selectedParties.forEach((party) => {
+              contentElements.push({ type: 'text', text: `- ${party}`, options: { x: 1.5, y: contentY, w: 5.5, h: 0.3, fontSize: 14, color: TEXT_COLOR, fontFace: 'Arial', lang: 'zh-CN' } });
+              contentY += 0.4;
+          });
+
+          contentY += 0.2;
+          contentElements.push({ type: 'text', text: '告知日期: ____________________', options: { x: 1, y: contentY, w: 5.5, h: 0.4, fontSize: 14, fontFace: 'Arial', lang: 'zh-CN' } });
+          
+          const boxEndY = contentY + 0.4 + 0.1;
+          const boxHeight = boxEndY - boxStartY;
+
+          slide.addShape(pres.shapes.RECTANGLE, { x: 0.75, y: boxStartY, w: 6.0, h: boxHeight, line: { color: 'c0c0c0', width: 1 } });
+          contentElements.forEach(el => slide.addText(el.text, el.options));
+      };
+
+
+      const exportDesignRequest = (data) => {
+          return new Promise((resolve, reject) => {
+              try {
+                  const pres = new PptxGenJS();
+                  pres.defineLayout({ name: 'A4_PORTRAIT', width: 7.5, height: 10 });
+                  pres.layout = 'A4_PORTRAIT';
+
+                  addSlide1(pres, data);
+                  addSlide2(pres, data);
+                  
+                  if (data.requestType === DesignRequestType.ProductPackaging || data.requestType === DesignRequestType.LabelDesign) {
+                      addSlide3(pres);
+                  }
+                  
+                  addSlide4(pres, data);
+                  
+                  const sanitizeFilename = (name) => name ? name.replace(/[\\/:*?"<>|]/g, '-') : 'data';
+                  const fileName = `${data.applicationDate}_${sanitizeFilename(data.productName)}_${sanitizeFilename(data.requestType)}_${sanitizeFilename(data.urgencyLevel)}.pptx`;
+
+                  pres.writeFile({ fileName });
+                  resolve();
+              } catch (error) {
+                  console.error(error);
+                  reject(error);
+              }
+          });
+      };
+      // --- End of services/powerpointService.ts content ---
+
+
+      // --- Start of components/FormField.tsx ---
+      const FormField = ({
+        label,
+        name,
+        value,
+        onChange,
+        type = 'text',
+        required = false,
+        as = 'input',
+        className = '',
+        rows = 3
+      }) => {
+        const commonProps = {
+          id: name,
+          name,
+          value,
+          onChange,
+          required,
+          className: 'mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-brand-cyan focus:border-brand-cyan sm:text-sm bg-white text-gray-900'
+        };
+
+        return (
+          <div className={className}>
+            <label htmlFor={name} className="block text-sm font-medium text-gray-700">
+              {label} {required && <span className="text-red-500">*</span>}
+            </label>
+            {as === 'textarea' ? (
+              <textarea {...commonProps} rows={rows}></textarea>
+            ) : (
+              <input type={type} {...commonProps} />
+            )}
+          </div>
+        );
+      };
+      // --- End of components/FormField.tsx ---
+
+
+      // --- Start of components/SelectWithOtherField.tsx ---
+      const SelectWithOtherField = ({
+        label,
+        name,
+        value,
+        onChange,
+        options,
+        otherName,
+        otherValue,
+        required = false,
+        className = '',
+        placeholder = '請詳述...'
+      }) => {
+        return (
+          <div className={className}>
+            <label htmlFor={name} className="block text-sm font-medium text-gray-700">
+              {label} {required && <span className="text-red-500">*</span>}
+            </label>
+            <select
+              id={name}
+              name={name}
+              value={value}
+              onChange={onChange}
+              required={required}
+              className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-brand-cyan focus:border-brand-cyan sm:text-sm bg-white text-gray-900"
+            >
+              {options.map(option => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+            {value === '其他' && (
+              <input
+                type="text"
+                name={otherName}
+                value={otherValue}
+                onChange={onChange}
+                placeholder={placeholder}
+                required
+                className="mt-2 w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-brand-cyan focus:border-brand-cyan bg-white text-gray-900"
+              />
+            )}
+          </div>
+        );
+      };
+      // --- End of components/SelectWithOtherField.tsx ---
+
+
+      // --- Start of App.tsx content ---
+      const App = () => {
+        const { useState, useEffect, useCallback } = React;
+
+        const getInitialDate = (addDays = 0) => {
+          const date = new Date();
+          date.setDate(date.getDate() + addDays);
+          return date.toISOString().split('T')[0];
+        };
+
+        const [formData, setFormData] = useState({
+          applicant: '',
+          applicationDate: getInitialDate(),
+          expectedDeliveryDate: getInitialDate(),
+          requestType: DesignRequestType.ProductPackaging,
+          requestTypeOther: '',
+          urgencyType: UrgencyType.New,
+          urgencyLevel: UrgencyLevel.Normal,
+          brand: '活力零食 GooToE',
+          brandOther: '',
+          productName: '',
+          productNumber: '',
+          packagingMaterial: 'ATS01吊掛袋 120*330mm',
+          packagingMaterialOther: '',
+          origin: '越南',
+          originOther: '',
+          salesUnit: '美國',
+          salesUnitOther: '',
+          basis: '',
+          remarks: '',
+          notifyParties: NOTIFY_PARTIES_LIST.reduce((acc, party) => ({ ...acc, [party]: true }), {}),
+          notifyPartiesOther: '',
+          salesUnitDetail: '',
+          labelType: LABEL_TYPES.reduce((acc, type) => ({ ...acc, [type]: false }), {}),
+          labelTypeOther: '',
+        });
+        const [isGenerating, setIsGenerating] = useState(false);
+
+        useEffect(() => {
+          const getDeliveryDateOffset = () => {
+              const { requestType, urgencyType, urgencyLevel } = formData;
+              try {
+                  return LEAD_TIMES[requestType]?.[urgencyType]?.[urgencyLevel] || 7;
+              } catch (e) {
+                  return 7;
+              }
+          };
+          
+          setFormData(prev => ({ ...prev, expectedDeliveryDate: getInitialDate(getDeliveryDateOffset()) }));
+        }, [formData.requestType, formData.urgencyType, formData.urgencyLevel]);
+
+        useEffect(() => {
+          const availableTypes = URGENCY_TYPE_AVAILABILITY[formData.requestType] || [];
+          if (availableTypes.length > 0 && !availableTypes.includes(formData.urgencyType)) {
+              setFormData(prev => ({ ...prev, urgencyType: availableTypes[0] }));
+          }
+        }, [formData.requestType]);
+
+        const handleChange = useCallback((e) => {
+          const { name, value } = e.target;
+          setFormData(prev => ({ ...prev, [name]: value }));
+        }, []);
+        
+        const handleCheckboxChange = useCallback((e) => {
+            const { name, checked } = e.target;
+            setFormData(prev => ({
+                ...prev,
+                notifyParties: {
+                    ...prev.notifyParties,
+                    [name]: checked,
+                }
+            }));
+        }, []);
+
+        const handleLabelTypeChange = useCallback((e) => {
+            const { name, checked } = e.target;
+            setFormData(prev => ({
+                ...prev,
+                labelType: {
+                    ...prev.labelType,
+                    [name]: checked,
+                }
+            }));
+        }, []);
+
+        const handleSubmit = async () => {
+          setIsGenerating(true);
+          try {
+            await exportDesignRequest(formData);
+          } catch (error) {
+            console.error("Failed to generate PowerPoint:", error);
+            alert("產生 PowerPoint 檔案時發生錯誤。");
+          } finally {
+            setIsGenerating(false);
+          }
+        };
+        
+        const availableUrgencyTypes = URGENCY_TYPE_AVAILABILITY[formData.requestType] || [];
+        
+        const productNameLabel =
+          formData.requestType === DesignRequestType.ProductPackaging || formData.requestType === DesignRequestType.LabelDesign
+            ? '品名'
+            : '項目名稱';
+
+        return (
+          <div className="min-h-screen bg-gray-50 text-gray-800">
+            <header className="bg-brand-dark shadow-md">
+              <div className="container mx-auto px-6 py-4">
+                <h1 className="text-3xl font-bold text-white tracking-wider">設計需求單產生器</h1>
+                <p className="text-brand-teal mt-1">填寫表單以產生 PowerPoint 設計需求單</p>
+              </div>
+            </header>
+
+            <main className="container mx-auto p-6 space-y-8">
+              <div className="bg-white p-8 rounded-lg shadow-lg">
+                <h2 className="text-2xl font-semibold text-brand-blue border-b-2 border-brand-teal pb-3 mb-6">申請資料</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+                  <FormField label="申請人" name="applicant" value={formData.applicant} onChange={handleChange} required />
+                  <FormField label="申請日期" name="applicationDate" type="date" value={formData.applicationDate} onChange={handleChange} required />
+                  
+                  <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-6">
+                      <div>
+                          <label htmlFor="requestType" className="block text-sm font-medium text-gray-700 mb-1">設計需求種類 <span className="text-red-500">*</span></label>
+                          <select id="requestType" name="requestType" value={formData.requestType} onChange={handleChange} className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-brand-cyan focus:border-brand-cyan sm:text-sm bg-white text-gray-900">
+                              {Object.values(DesignRequestType).map(type => (
+                                  <option key={type} value={type}>{type}</option>
+                              ))}
+                          </select>
+                          {formData.requestType === DesignRequestType.Other && (
+                               <input type="text" name="requestTypeOther" value={formData.requestTypeOther} placeholder="請詳述..." onChange={handleChange} className="mt-2 w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-brand-cyan focus:border-brand-cyan bg-white text-gray-900" />
+                          )}
+                      </div>
+                      <div>
+                          <label htmlFor="urgencyType" className="block text-sm font-medium text-gray-700 mb-1">設計類型 <span className="text-red-500">*</span></label>
+                          <select id="urgencyType" name="urgencyType" value={formData.urgencyType} onChange={handleChange} disabled={availableUrgencyTypes.length === 0} className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-brand-cyan focus:border-brand-cyan sm:text-sm disabled:bg-gray-200 bg-white text-gray-900">
+                              {availableUrgencyTypes.map(type => (
+                                  <option key={type} value={type}>{type}</option>
+                              ))}
+                          </select>
+                      </div>
+                      <div>
+                          <label htmlFor="urgencyLevel" className="block text-sm font-medium text-gray-700 mb-1">緊急程度 <span className="text-red-500">*</span></label>
+                          <select id="urgencyLevel" name="urgencyLevel" value={formData.urgencyLevel} onChange={handleChange} className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-brand-cyan focus:border-brand-cyan sm:text-sm bg-white text-gray-900">
+                              {Object.values(UrgencyLevel).map(level => (
+                                  <option key={level} value={level}>{level}</option>
+                              ))}
+                          </select>
+                      </div>
+                  </div>
+                  
+                  {formData.requestType === DesignRequestType.LabelDesign && (
+                      <div className="md:col-span-2">
+                          <label className="block text-sm font-medium text-gray-700 mb-2">貼標種類 <span className="text-red-500">*</span></label>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
+                              {LABEL_TYPES.map(type => (
+                                  <div key={type} className="flex items-center">
+                                      <input type="checkbox" id={`label_${type}`} name={type} checked={!!formData.labelType[type]} onChange={handleLabelTypeChange} className="h-4 w-4 text-brand-cyan focus:ring-brand-cyan border-gray-300 rounded"/>
+                                      <label htmlFor={`label_${type}`} className="ml-2 block text-sm text-gray-900">{type}</label>
+                                  </div>
+                              ))}
+                          </div>
+                          {formData.labelType['其他'] && (
+                              <input type="text" name="labelTypeOther" value={formData.labelTypeOther} onChange={handleChange} placeholder="請詳述其他貼標種類..." className="mt-3 w-full md:w-1/2 p-2 border border-gray-300 rounded-md shadow-sm focus:ring-brand-cyan focus:border-brand-cyan bg-white text-gray-900"/>
+                          )}
+                      </div>
+                  )}
+
+                  <FormField label="預計交期" name="expectedDeliveryDate" type="date" value={formData.expectedDeliveryDate} onChange={handleChange} required />
+                  <SelectWithOtherField
+                      label="品牌"
+                      name="brand"
+                      value={formData.brand}
+                      onChange={handleChange}
+                      options={BRAND_OPTIONS}
+                      otherName="brandOther"
+                      otherValue={formData.brandOther}
+                      required
+                  />
+                  <FormField label={productNameLabel} name="productName" value={formData.productName} onChange={handleChange} required />
+                  
+                  {(formData.requestType === DesignRequestType.ProductPackaging || formData.requestType === DesignRequestType.LabelDesign) && (
+                    <>
+                      <FormField label="品號" name="productNumber" value={formData.productNumber} onChange={handleChange} />
+                      <SelectWithOtherField
+                          label="包材(包含尺寸)"
+                          name="packagingMaterial"
+                          value={formData.packagingMaterial}
+                          onChange={handleChange}
+                          options={PACKAGING_MATERIAL_OPTIONS}
+                          otherName="packagingMaterialOther"
+                          otherValue={formData.packagingMaterialOther}
+                      />
+                      <SelectWithOtherField
+                          label="產地"
+                          name="origin"
+                          value={formData.origin}
+                          onChange={handleChange}
+                          options={ORIGIN_OPTIONS}
+                          otherName="originOther"
+                          otherValue={formData.originOther}
+                      />
+                      <SelectWithOtherField
+                          label="銷售國家"
+                          name="salesUnit"
+                          value={formData.salesUnit}
+                          onChange={handleChange}
+                          options={SALES_UNIT_OPTIONS}
+                          otherName="salesUnitOther"
+                          otherValue={formData.salesUnitOther}
+                      />
+                    </>
+                  )}
+
+                  <FormField label="依據" name="basis" value={formData.basis} onChange={handleChange} />
+                  
+                  <FormField label="備註" name="remarks" value={formData.remarks} onChange={handleChange} as="textarea" className="md:col-span-2" rows={4} />
+                </div>
+              </div>
+
+              <div className="bg-white p-8 rounded-lg shadow-lg">
+                <h2 className="text-2xl font-semibold text-brand-blue border-b-2 border-brand-teal pb-3 mb-6">完稿後需告知人員</h2>
+                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {NOTIFY_PARTIES_LIST.map(party => (
+                        <div key={party} className="flex items-center">
+                            <input type="checkbox" id={party} name={party} checked={!!formData.notifyParties[party]} onChange={handleCheckboxChange} className="h-4 w-4 text-brand-cyan focus:ring-brand-cyan border-gray-300 rounded"/>
+                            <label htmlFor={party} className="ml-2 block text-sm text-gray-900">{party}</label>
+
+                        </div>
+                    ))}
+                 </div>
+                 <div className="mt-4 space-y-3">
+                     {formData.notifyParties['業務單位'] && (
+                         <input type="text" name="salesUnitDetail" value={formData.salesUnitDetail} onChange={handleChange} placeholder="請詳述業務單位 (如: 國內、國外)" className="w-full md:w-1/2 p-2 border border-gray-300 rounded-md shadow-sm focus:ring-brand-cyan focus:border-brand-cyan bg-white text-gray-900"/>
+                     )}
+                     {formData.notifyParties['其他'] && (
+                         <input type="text" name="notifyPartiesOther" value={formData.notifyPartiesOther} onChange={handleChange} placeholder="請詳述其他告知人員..." className="w-full md:w-1/2 p-2 border border-gray-300 rounded-md shadow-sm focus:ring-brand-cyan focus:border-brand-cyan bg-white text-gray-900"/>
+                     )}
+                 </div>
+              </div>
+
+              <div className="flex justify-end mt-8">
+                  <button
+                      onClick={handleSubmit}
+                      disabled={isGenerating}
+                      className="inline-flex items-center px-8 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-brand-orange hover:bg-brand-red focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-orange disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  >
+                      {isGenerating ? (
+                          <>
+                              <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                              </svg>
+                              產生中...
+                          </>
+                      ) : '匯出為 PowerPoint'}
+                  </button>
+              </div>
+            </main>
+            <footer className="text-center py-4 text-gray-500 text-sm">
+              <p>Design Request Form Generator &copy; {new Date().getFullYear()}</p>
+            </footer>
+          </div>
+        );
+      };
+      // --- End of App.tsx content ---
+
+
+      // --- Start of index.tsx content ---
+      const rootElement = document.getElementById('root');
+      if (!rootElement) {
+        throw new Error("Could not find root element to mount to");
+      }
+
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(
+        <React.StrictMode>
+          <App />
+        </React.StrictMode>
+      );
+      // --- End of index.tsx content ---
+    </script>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
