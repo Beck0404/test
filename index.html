@@ -3,293 +3,36 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>寵物食品包裝校稿助手</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <title>寵物食品包裝校稿系統</title>
+    <style>
+      body { margin: 0; background: #f5f0e8; color: #1f2937; font-family: 'Noto Sans TC', sans-serif; }
+      .container { max-width: 980px; margin: 0 auto; padding: 24px 16px 40px; }
+      h1 { margin: 0 0 8px; font-size: 28px; color: #1a3318; }
+      .muted { color: #6b7280; margin-bottom: 16px; }
+      .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.08); padding: 16px; margin-bottom: 14px; }
+      .card h2 { margin: 0 0 10px; font-size: 18px; color: #1a3318; }
+      .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(140px,1fr)); margin-top: 12px; }
+      .thumb { margin: 0; background: #f8fafc; border-radius: 8px; overflow: hidden; border: 1px solid #e5e7eb; }
+      .thumb img { width: 100%; height: 100px; object-fit: cover; display: block; }
+      .thumb figcaption { font-size: 12px; padding: 6px 8px; color: #4b5563; }
+      pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.6; background: #f8fafc; border-radius: 8px; padding: 10px; }
+      .error { color: #dc2626; font-weight: 600; }
+    </style>
+
+    <!-- Runtime dependencies for App.jsx -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   </head>
-  <body class="bg-slate-100 text-slate-900">
-    <main class="max-w-6xl mx-auto p-6 md:p-10 space-y-6">
-      <header class="space-y-2">
-        <h1 class="text-3xl font-bold">寵物食品包裝校稿助手（圖片上傳版）</h1>
-        <p class="text-slate-700">上傳包裝圖片後，系統會先做「圖片文字辨識」，再依你指定的檢查項目產生逐項報告。</p>
-        <p class="text-sm text-amber-700 bg-amber-100 border border-amber-300 rounded p-3">
-          注意：此工具為初步檢核，不取代法規顧問或主管機關判定。請務必再由法規／品保人員最終確認。
-        </p>
-      </header>
+  <body>
+    <div id="root"></div>
 
-      <section class="bg-white rounded-xl shadow p-5 space-y-4">
-        <h2 class="text-xl font-semibold">1) 上傳包裝圖片</h2>
-        <input id="imageInput" type="file" accept="image/*" multiple class="block w-full text-sm" />
-        <div id="preview" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
-      </section>
-
-      <section class="bg-white rounded-xl shadow p-5 space-y-4">
-        <h2 class="text-xl font-semibold">2) 勾選辨識語言（可複選）</h2>
-        <div class="flex flex-wrap gap-4" id="langCheckboxGroup">
-          <label class="inline-flex items-center gap-2">
-            <input type="checkbox" id="langChiTra" value="chi_tra" checked class="h-4 w-4" />
-            <span>繁體中文</span>
-          </label>
-          <label class="inline-flex items-center gap-2">
-            <input type="checkbox" id="langEng" value="eng" checked class="h-4 w-4" />
-            <span>英文</span>
-          </label>
-          <label class="inline-flex items-center gap-2">
-            <input type="checkbox" id="langJpn" value="jpn" class="h-4 w-4" />
-            <span>日文</span>
-          </label>
-          <label class="inline-flex items-center gap-2">
-            <input type="checkbox" id="langKor" value="kor" class="h-4 w-4" />
-            <span>韓文</span>
-          </label>
-        </div>
-        <p class="text-xs text-slate-500">至少要勾選一種語言。</p>
-      </section>
-
-      <section class="bg-white rounded-xl shadow p-5 space-y-4">
-        <h2 class="text-xl font-semibold">3) 執行校稿</h2>
-        <button id="runBtn" class="px-5 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-slate-400">開始辨識與檢核</button>
-        <p id="status" class="text-sm text-slate-600">尚未執行。</p>
-      </section>
-
-      <section class="bg-white rounded-xl shadow p-5 space-y-4">
-        <h2 class="text-xl font-semibold">4) 檢核結果</h2>
-        <div id="resultSummary" class="text-sm"></div>
-
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm border border-slate-200">
-            <thead class="bg-slate-100">
-              <tr>
-                <th class="text-left p-2 border">檢查項目</th>
-                <th class="text-left p-2 border">狀態</th>
-                <th class="text-left p-2 border">說明</th>
-              </tr>
-            </thead>
-            <tbody id="checkTableBody"></tbody>
-          </table>
-        </div>
-
-        <div>
-          <h3 class="font-medium mb-2">高風險用語</h3>
-          <ul id="riskList" class="list-disc ml-6 text-amber-700"></ul>
-        </div>
-
-        <div>
-          <h3 class="font-medium mb-2">建議補強</h3>
-          <ul id="suggestList" class="list-disc ml-6 text-slate-800"></ul>
-        </div>
-
-        <details class="mt-4">
-          <summary class="cursor-pointer font-medium">查看圖片文字辨識結果（原始文字）</summary>
-          <pre id="rawText" class="mt-2 p-3 bg-slate-100 rounded whitespace-pre-wrap text-xs"></pre>
-        </details>
-      </section>
-    </main>
-
-    <script>
-      const input = document.getElementById('imageInput');
-      const preview = document.getElementById('preview');
-      const runBtn = document.getElementById('runBtn');
-      const statusEl = document.getElementById('status');
-      const resultSummary = document.getElementById('resultSummary');
-      const checkTableBody = document.getElementById('checkTableBody');
-      const riskList = document.getElementById('riskList');
-      const suggestList = document.getElementById('suggestList');
-      const rawText = document.getElementById('rawText');
-      const langChiTra = document.getElementById('langChiTra');
-      const langEng = document.getElementById('langEng');
-      const langJpn = document.getElementById('langJpn');
-      const langKor = document.getElementById('langKor');
-
-      const checklistRules = [
-        { label: '品號', patterns: [/品號/, /item\s*(no|number)/i, /sku/i] },
-        { label: '條碼', patterns: [/條碼/, /barcode/i, /ean/i, /upc/i] },
-        { label: '品名', patterns: [/品名/, /product\s*name/i] },
-        { label: '成份', patterns: [/成份/, /成分/, /ingredients?/i] },
-        { label: 'GA', patterns: [/\bGA\b/, /guaranteed\s*analysis/i] },
-        { label: '代謝能', patterns: [/代謝能/, /metabolizable\s*energy/i, /ME\s*[:：]/i] },
-        { label: '建議餵食量', patterns: [/建議餵食量/, /餵食建議/, /feeding\s*(guide|instruction)/i] },
-        { label: 'AAFCO 聲明', patterns: [/AAFCO/i, /營養充足|完整均衡|complete\s*and\s*balanced/i] },
-        { label: '保存方式', patterns: [/保存方式/, /保存條件/, /storage/i] },
-        { label: '換食指南', patterns: [/換食指南/, /轉食/, /transition/i] },
-        { label: '淨重', patterns: [/淨重/, /net\s*weight/i] },
-        { label: '效期/保存期限', patterns: [/效期/, /保存期限/, /best\s*before/i, /exp/i] },
-        { label: '效期打印處', patterns: [/效期打印處/, /打印處/, /噴碼處/, /printed\s*on/i] },
-        { label: '製造商', patterns: [/製造商/, /manufacturer/i] },
-        { label: '進口商/經銷商', patterns: [/進口商/, /經銷商/, /importer/i, /distributor/i] },
-        { label: '注意事項', patterns: [/注意事項/, /caution/i, /warning/i] },
-        { label: '責任險', patterns: [/責任險/, /product\s*liability\s*insurance/i] },
-        { label: 'QR code', patterns: [/QR\s*code/i, /QR碼/, /qrcode/i] },
-        { label: '版次', patterns: [/版次/, /版號/, /revision/i, /rev\.?/i] },
-        { label: '合規性', patterns: [/符合/, /compliance/i, /regulation/i, /法規/] },
-        { label: '品牌風格', patterns: [/品牌/, /brand/i, /logo/i] },
-        { label: '文案錯別字', manualOnly: true }
-      ];
-
-      const riskPhrases = [
-        { phrase: /治療|療效|根治|預防疾病|改善疾病/, note: '疑似涉及醫療效能宣稱，建議改為一般營養支持描述。' },
-        { phrase: /獸醫(強力)?推薦|醫師推薦/, note: '推薦背書用語可能涉及廣告規範，需確認佐證文件。' },
-        { phrase: /100%無副作用|完全無害|絕對安全/, note: '絕對性宣稱通常屬高風險用語。' }
-      ];
-
-      input.addEventListener('change', () => {
-        preview.innerHTML = '';
-        [...input.files].forEach((file) => {
-          const img = document.createElement('img');
-          img.src = URL.createObjectURL(file);
-          img.className = 'w-full h-32 object-cover rounded border';
-          img.alt = file.name;
-          preview.appendChild(img);
-        });
-      });
-
-      const appendList = (el, items, emptyText) => {
-        el.innerHTML = '';
-        if (!items.length) {
-          const li = document.createElement('li');
-          li.textContent = emptyText;
-          li.className = 'text-emerald-700';
-          el.appendChild(li);
-          return;
-        }
-
-        items.forEach((text) => {
-          const li = document.createElement('li');
-          li.textContent = text;
-          el.appendChild(li);
-        });
-      };
-
-      function renderChecklistRows(rows) {
-        checkTableBody.innerHTML = '';
-        rows.forEach((row) => {
-          const tr = document.createElement('tr');
-          tr.className = 'border-b';
-
-          const statusClass = row.ok ? 'text-emerald-700' : row.manual ? 'text-blue-700' : 'text-red-700';
-          const statusText = row.ok ? '已偵測' : row.manual ? '需人工確認' : '未偵測';
-
-          tr.innerHTML = `
-            <td class="p-2 border">${row.label}</td>
-            <td class="p-2 border font-medium ${statusClass}">${statusText}</td>
-            <td class="p-2 border">${row.message}</td>
-          `;
-          checkTableBody.appendChild(tr);
-        });
-      }
-
-      function getSelectedLanguages() {
-        const langs = [];
-        if (langChiTra.checked) langs.push(langChiTra.value);
-        if (langEng.checked) langs.push(langEng.value);
-        if (langJpn.checked) langs.push(langJpn.value);
-        if (langKor.checked) langs.push(langKor.value);
-        return langs;
-      }
-
-      async function recognizeTextFromImages(files, lang) {
-        let mergedText = '';
-        for (let i = 0; i < files.length; i++) {
-          const f = files[i];
-          statusEl.textContent = `圖片文字辨識中 (${i + 1}/${files.length})：${f.name}`;
-          const { data } = await Tesseract.recognize(f, lang, {
-            logger: (m) => {
-              if (m.status === 'recognizing text') {
-                const pct = Math.round((m.progress || 0) * 100);
-                statusEl.textContent = `圖片文字辨識中 (${i + 1}/${files.length})：${f.name} - ${pct}%`;
-              }
-            }
-          });
-          mergedText += `\n\n===== ${f.name} =====\n${data.text || ''}`;
-        }
-        return mergedText;
-      }
-
-      function evaluateText(text) {
-        const checklistRows = checklistRules.map((rule) => {
-          if (rule.manualOnly) {
-            return {
-              label: rule.label,
-              ok: false,
-              manual: true,
-              message: '此項需人工複核（OCR 無法準確判斷語意與錯別字）。'
-            };
-          }
-
-          const found = rule.patterns.some((p) => p.test(text));
-          return {
-            label: rule.label,
-            ok: found,
-            message: found ? '已找到相關關鍵字。' : '未找到明確關鍵字，建議人工確認版面內容。'
-          };
-        });
-
-        const risks = [];
-        const suggestions = [];
-
-        riskPhrases.forEach((item) => {
-          if (item.phrase.test(text)) {
-            risks.push(`偵測到高風險詞：${item.phrase}`);
-            suggestions.push(item.note);
-          }
-        });
-
-        if (!/批號|lot|batch/i.test(text)) {
-          suggestions.push('建議補上批號（Lot/Batch）以利追溯。');
-        }
-
-        if (!/電話|tel|service\s*line/i.test(text)) {
-          suggestions.push('建議補上客服電話或聯絡方式。');
-        }
-
-        return { checklistRows, risks, suggestions };
-      }
-
-      runBtn.addEventListener('click', async () => {
-        if (!input.files.length) {
-          alert('請先上傳至少一張圖片。');
-          return;
-        }
-
-        const selectedLanguages = getSelectedLanguages();
-        if (!selectedLanguages.length) {
-          alert('請至少勾選一種辨識語言。');
-          return;
-        }
-
-        runBtn.disabled = true;
-        resultSummary.textContent = '';
-        checkTableBody.innerHTML = '';
-        riskList.innerHTML = '';
-        suggestList.innerHTML = '';
-        rawText.textContent = '';
-
-        try {
-          const mergedText = await recognizeTextFromImages([...input.files], selectedLanguages.join('+'));
-          rawText.textContent = mergedText.trim();
-
-          const report = evaluateText(mergedText);
-          renderChecklistRows(report.checklistRows);
-          appendList(riskList, report.risks, '未偵測到明顯高風險用語。');
-          appendList(suggestList, report.suggestions, '目前沒有額外補強建議。');
-
-          const detectedCount = report.checklistRows.filter((x) => x.ok).length;
-          const pendingCount = report.checklistRows.filter((x) => !x.ok && !x.manual).length;
-          const manualCount = report.checklistRows.filter((x) => x.manual).length;
-
-          resultSummary.innerHTML = `
-            <p class="font-medium">檢核完成：共 ${input.files.length} 張圖片。</p>
-            <p class="text-slate-600">已偵測 ${detectedCount} 項、未偵測 ${pendingCount} 項、需人工確認 ${manualCount} 項。</p>
-          `;
-
-          statusEl.textContent = '圖片文字辨識與檢核完成。';
-        } catch (error) {
-          console.error(error);
-          statusEl.textContent = '執行失敗，請改用更清晰的圖片或稍後再試。';
-        } finally {
-          runBtn.disabled = false;
-        }
-      });
+    <!-- Load JSX file directly via Babel -->
+    <script type="text/babel" data-presets="react" src="./App.jsx"></script>
+    <script type="text/babel" data-presets="react">
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
     </script>
   </body>
 </html>
