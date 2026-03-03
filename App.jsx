@@ -1,8 +1,7 @@
-import { useState, useCallback, useEffect } from "react";
-import * as XLSX from "xlsx";
+const { useState, useCallback, useEffect } = React;
 
 // 使用說明：
-// 1) 這份檔案為你提供的 Claude 草稿延續版本，可直接放入 React 專案（例如 Vite）使用。
+// 1) 這份檔案可直接由 index.html 透過 Babel 載入。
 // 2) 需於執行環境提供 `window.storage`（get/set/delete）與 `window.CLAUDE_API_KEY`。
 // 3) 若沒有 `window.storage`，會自動 fallback 到 localStorage。
 
@@ -35,15 +34,6 @@ const LEGAL_KNOWLEDGE = `【正確法規架構】
 保健：視力、口腔、皮膚、骨質
 幫助：維護牙齦健康、控制牙垢形成`;
 
-const COMPARE_FIELDS = [
-  { key: "品號", label: "品號", icon: "🔖" },
-  { key: "條碼", label: "國際條碼", icon: "📊" },
-  { key: "品名", label: "品名", icon: "🏷️" },
-  { key: "成份", label: "成份列表", icon: "🧪" },
-  { key: "分析值", label: "保證分析值", icon: "📈" },
-  { key: "淨重", label: "淨重／規格", icon: "⚖️" },
-];
-
 const COL_VARIANTS = {
   品號: ["品號", "產品編號", "品號 (productCode)", "貨 號", "貨號"],
   條碼: ["國條", "條  碼", "條碼(方便複製)", "亞馬遜條碼"],
@@ -62,10 +52,6 @@ const storageApi = {
   async set(key, value) {
     if (window.storage?.set) return window.storage.set(key, value);
     localStorage.setItem(key, value);
-  },
-  async delete(key) {
-    if (window.storage?.delete) return window.storage.delete(key);
-    localStorage.removeItem(key);
   },
 };
 
@@ -94,15 +80,7 @@ function buildProductIndex(workbook) {
     let headerRow = [];
     for (let i = 0; i < Math.min(raw.length, 5); i++) {
       const row = raw[i].map((c) => String(c || ""));
-      if (
-        COL_VARIANTS.品號.some((v) =>
-          row.some(
-            (c) =>
-              c.replace(/\s+/g, "") === v.replace(/\s+/g, "") ||
-              c.replace(/\s+/g, "").includes(v.split("(")[0].replace(/\s+/g, "")),
-          ),
-        )
-      ) {
+      if (COL_VARIANTS.品號.some((v) => row.some((c) => c.replace(/\s+/g, "").includes(v.split("(")[0].replace(/\s+/g, ""))))) {
         headerRowIdx = i;
         headerRow = row;
         break;
@@ -122,11 +100,7 @@ function buildProductIndex(workbook) {
       const row = raw[i];
       const pn = String(row[colMap["品號"]] || "").trim();
       if (pn && !pn.startsWith("#") && pn !== "undefined" && !index[pn]) {
-        const mapped = {};
-        for (const [field, idx] of Object.entries(colMap)) {
-          mapped[field] = idx >= 0 ? String(row[idx] || "").trim() : "";
-        }
-        index[pn] = { sheetName, data: mapped };
+        index[pn] = { sheetName, data: Object.fromEntries(Object.entries(colMap).map(([f, idx]) => [f, idx >= 0 ? String(row[idx] || "").trim() : ""])) };
         count++;
       }
     }
@@ -138,14 +112,9 @@ function buildProductIndex(workbook) {
 let _JSZip = null;
 async function loadJSZip() {
   if (_JSZip) return _JSZip;
-  if (window.JSZip) {
-    _JSZip = window.JSZip;
-    return _JSZip;
-  }
+  if (window.JSZip) return (_JSZip = window.JSZip);
   const mod = await import("https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm");
-  _JSZip = mod.default || mod;
-  if (!_JSZip) throw new Error("JSZip 無法載入");
-  return _JSZip;
+  return (_JSZip = mod.default || mod);
 }
 
 function blobToDataUrl(blob) {
@@ -154,10 +123,6 @@ function blobToDataUrl(blob) {
     r.onload = (e) => res(e.target.result);
     r.readAsDataURL(blob);
   });
-}
-
-function xmlText(xml) {
-  return [...xml.matchAll(/<a:t[^>]*?>([^<]*)<\/a:t>/g)].map((m) => m[1]).filter((t) => t.trim()).join(" ");
 }
 
 function xmlParas(xml) {
@@ -180,10 +145,7 @@ function parseRels(relsXml) {
 async function parsePptx(file) {
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
-
-  const slideKeys = Object.keys(zip.files)
-    .filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f))
-    .sort((a, b) => +a.match(/(\d+)\.xml$/)[1] - +b.match(/(\d+)\.xml$/)[1]);
+  const slideKeys = Object.keys(zip.files).filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f)).sort((a, b) => +a.match(/(\d+)\.xml$/)[1] - +b.match(/(\d+)\.xml$/)[1]);
 
   const allImages = [];
   const seenMedia = new Set();
@@ -195,20 +157,14 @@ async function parsePptx(file) {
 
     for (const { type, target } of parseRels(relsXml)) {
       if (!type.toLowerCase().includes("image")) continue;
-      const mediaPath = target.startsWith("../") ? "ppt/" + target.slice(3) : target;
-      if (!mediaPath.match(/\.(png|jpg|jpeg|gif|webp|bmp)$/i)) continue;
-      if (!zip.files[mediaPath]) continue;
-      if (seenMedia.has(mediaPath)) continue;
+      const mediaPath = target.startsWith("../") ? `ppt/${target.slice(3)}` : target;
+      if (!mediaPath.match(/\.(png|jpg|jpeg|gif|webp|bmp)$/i) || !zip.files[mediaPath] || seenMedia.has(mediaPath)) continue;
       seenMedia.add(mediaPath);
 
       const blob = await zip.files[mediaPath].async("blob");
-      const ext = mediaPath.match(/\.(\w+)$/i)?.[1]?.toLowerCase();
-      const mimeMap = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp", bmp: "image/bmp" };
-      const mimeType = mimeMap[ext] || "image/png";
-      const typedBlob = new Blob([blob], { type: mimeType });
-      const dataUrl = await blobToDataUrl(typedBlob);
+      const dataUrl = await blobToDataUrl(blob);
       const name = mediaPath.split("/").pop();
-      allImages.push({ dataUrl, name, slideIndex: si, file: new File([typedBlob], name, { type: mimeType }) });
+      allImages.push({ dataUrl, name, slideIndex: si, file: new File([blob], name, { type: blob.type || "image/png" }) });
     }
   }
 
@@ -220,9 +176,7 @@ async function parsePptx(file) {
       const p = s1paras[i];
       if ((p.endsWith(":") || p.endsWith("：")) && p.length < 20) {
         const val = s1paras[i + 1];
-        if (val && val.length < 100 && !val.endsWith(":") && !val.endsWith("：")) {
-          formData[p.slice(0, -1).trim()] = val;
-        }
+        if (val && val.length < 100 && !val.endsWith(":") && !val.endsWith("：")) formData[p.slice(0, -1).trim()] = val;
       }
     }
   }
@@ -230,63 +184,46 @@ async function parsePptx(file) {
   return { allImages, formData };
 }
 
-async function callClaude(messages, system, maxTokens = 2500) {
-  const apiKey = window.CLAUDE_API_KEY;
-  if (!apiKey) {
-    throw new Error("尚未設定 window.CLAUDE_API_KEY");
-  }
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, system, messages }),
-  });
-
-  const data = await res.json();
-  if (!res.ok || data.error) throw new Error(data?.error?.message || "Claude API 呼叫失敗");
-  return data.content?.map((b) => b.text || "").join("\n") || "";
-}
-
-export default function App() {
+function App() {
   const [dbReady, setDbReady] = useState(false);
-  const [dbInit, setDbInit] = useState(false);
   const [dbMeta, setDbMeta] = useState(null);
-  const [productIndex, setProductIndex] = useState({});
+  const [dbInit, setDbInit] = useState(false);
+  const [productCount, setProductCount] = useState(0);
   const [allImages, setAllImages] = useState([]);
   const [formData, setFormData] = useState({});
-  const [checkerErr, setCheckerErr] = useState(null);
+  const [err, setErr] = useState("");
 
   useEffect(() => {
     (async () => {
-      const r = await storageApi.get("petfood-db-v3");
-      if (r?.value) {
-        const s = JSON.parse(r.value);
-        setProductIndex(s.index || {});
-        setDbMeta(s.meta || null);
-        setDbReady(true);
+      try {
+        const r = await storageApi.get("petfood-db-v3");
+        if (r?.value) {
+          const s = JSON.parse(r.value);
+          setDbMeta(s.meta || null);
+          setProductCount(Object.keys(s.index || {}).length);
+          setDbReady(true);
+        }
+      } finally {
+        setDbInit(true);
       }
-      setDbInit(true);
     })();
   }, []);
 
   const handleExcel = (file) => {
+    if (!file) return;
+    setErr("");
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
         const wb = XLSX.read(e.target.result, { type: "array" });
         const { index, sheetSummary } = buildProductIndex(wb);
-        const total = Object.keys(index).length;
-        const meta = { filename: file.name, count: total, sheets: sheetSummary.length, updatedAt: new Date().toLocaleString("zh-TW") };
+        const meta = { filename: file.name, count: Object.keys(index).length, sheets: sheetSummary.length, updatedAt: new Date().toLocaleString("zh-TW") };
         await storageApi.set("petfood-db-v3", JSON.stringify({ index, sheetSummary, meta }));
-        setProductIndex(index);
         setDbMeta(meta);
+        setProductCount(meta.count);
         setDbReady(true);
       } catch (e2) {
-        setCheckerErr(`Excel 解析失敗：${e2.message}`);
+        setErr(`Excel 解析失敗：${e2.message}`);
       }
     };
     reader.readAsArrayBuffer(file);
@@ -297,57 +234,69 @@ export default function App() {
     const pptx = arr.find((f) => /\.pptx?$/i.test(f.name));
     const imgs = arr.filter((f) => f.type.startsWith("image/"));
 
-    if (pptx) {
-      const parsed = await parsePptx(pptx);
-      setAllImages(parsed.allImages);
-      setFormData(parsed.formData);
-      return;
-    }
-
-    if (imgs.length) {
-      const loaded = await Promise.all(
-        imgs.map(
-          (f) =>
-            new Promise((res) => {
-              const r = new FileReader();
-              r.onload = (e) => res({ dataUrl: e.target.result, name: f.name, slideIndex: 0, file: f });
-              r.readAsDataURL(f);
-            }),
-        ),
-      );
-      setAllImages(loaded);
+    try {
+      setErr("");
+      if (pptx) {
+        const parsed = await parsePptx(pptx);
+        setAllImages(parsed.allImages);
+        setFormData(parsed.formData);
+      } else if (imgs.length) {
+        const loaded = await Promise.all(
+          imgs.map(
+            (f) =>
+              new Promise((res) => {
+                const r = new FileReader();
+                r.onload = (e) => res({ dataUrl: e.target.result, name: f.name, slideIndex: 0 });
+                r.readAsDataURL(f);
+              }),
+          ),
+        );
+        setAllImages(loaded);
+        setFormData({});
+      }
+    } catch (e) {
+      setErr(`檔案解析失敗：${e.message}`);
     }
   }, []);
 
   if (!dbInit) return null;
 
   return (
-    <div style={{ padding: 24, fontFamily: "'Noto Serif TC',serif", background: "#f5f0e8", minHeight: "100vh" }}>
-      <h1>寵物食品包裝法規校稿系統（接續版）</h1>
-      <p style={{ color: "#666" }}>已完成：PPTX 解析、Excel 品號索引、Claude API 連接設定（讀取 window.CLAUDE_API_KEY）。</p>
+    <main className="container">
+      <h1>寵物食品包裝法規校稿系統</h1>
+      <p className="muted">現在 index.html 已可直接掛載 App.jsx（React + Babel），不需 bundler 也能跑。</p>
 
-      <div style={{ marginTop: 16, padding: 16, background: "#fff", borderRadius: 12 }}>
-        <h3>產品總表</h3>
+      <section className="card">
+        <h2>產品總表 Excel</h2>
         <input type="file" accept=".xlsx,.xls" onChange={(e) => handleExcel(e.target.files?.[0])} />
-        <div style={{ fontSize: 13, marginTop: 8 }}>{dbReady ? `✅ 已載入 ${dbMeta?.count ?? 0} 筆（${dbMeta?.filename}）` : "尚未載入"}</div>
-      </div>
+        <p>{dbReady ? `✅ 已載入 ${dbMeta?.filename}（${productCount} 筆）` : "尚未載入產品總表"}</p>
+      </section>
 
-      <div style={{ marginTop: 16, padding: 16, background: "#fff", borderRadius: 12 }}>
-        <h3>包裝檔案</h3>
+      <section className="card">
+        <h2>包裝檔案（圖片 / PPTX）</h2>
         <input type="file" multiple accept="image/*,.pptx,.ppt" onChange={(e) => handleFiles(e.target.files)} />
-        <div style={{ marginTop: 8, fontSize: 13 }}>已載入圖片數：{allImages.length}</div>
-        {Object.keys(formData).length > 0 && (
-          <pre style={{ fontSize: 12, background: "#f8fafc", padding: 12, borderRadius: 8 }}>{JSON.stringify(formData, null, 2)}</pre>
+        <p>已載入圖片數：{allImages.length}</p>
+        {allImages.length > 0 && (
+          <div className="grid">
+            {allImages.map((img, i) => (
+              <figure key={i} className="thumb">
+                <img src={img.dataUrl} alt={img.name} />
+                <figcaption>圖 {i + 1}：{img.name}</figcaption>
+              </figure>
+            ))}
+          </div>
         )}
-      </div>
+        {Object.keys(formData).length > 0 && <pre>{JSON.stringify(formData, null, 2)}</pre>}
+      </section>
 
-      <div style={{ marginTop: 16, padding: 16, background: "#fff", borderRadius: 12 }}>
-        <h3>法規知識庫（節錄）</h3>
-        <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{LEGAL_KNOWLEDGE.slice(0, 320)}...</pre>
-      </div>
+      <section className="card">
+        <h2>法規知識庫（節錄）</h2>
+        <pre>{LEGAL_KNOWLEDGE.slice(0, 300)}...</pre>
+      </section>
 
-      {checkerErr && <div style={{ marginTop: 12, color: "#dc2626" }}>⚠️ {checkerErr}</div>}
-      <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>品號索引大小：{Object.keys(productIndex).length}</div>
-    </div>
+      {err && <p className="error">⚠️ {err}</p>}
+    </main>
   );
 }
+
+window.App = App;
