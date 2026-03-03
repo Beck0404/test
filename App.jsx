@@ -1,38 +1,10 @@
 const { useState, useCallback, useEffect } = React;
 
-// 使用說明：
-// 1) 這份檔案可直接由 index.html 透過 Babel 載入。
-// 2) 需於執行環境提供 `window.storage`（get/set/delete）與 `window.CLAUDE_API_KEY`。
-// 3) 若沒有 `window.storage`，會自動 fallback 到 localStorage。
-
 const LEGAL_KNOWLEDGE = `【正確法規架構】
 1. 包裝標示必要項目 → 法源：《動物保護法》第22-5條
 2. 業者申報義務 → 《寵物食品業者申報辦法》第4條（後台行政申報，與包裝標示無關）
 3. 廣告/宣傳用詞規範 → 《動物保護法》第22-5條第2項＋《寵物食品標示宣傳廣告涉及不實誇張或易生誤解認定原則》（113年7月1日生效）
-4. 罰則 → 違反第22-5條：依《動物保護法》第29條，限期改善後可處 3~15萬元罰鍰
-
-【必要標示項目（依《動物保護法》第22-5條）】
-1. 品名
-2. 淨重、容量、數量或度量（法定度量衡單位）
-3. 主要原料與添加物名稱（依含量由多至少排列）
-4. 主要營養成分及含量
-5. 製造或加工業者名稱、地址及電話
-   ※ 輸入品：另須加註輸入業者及國內負責廠商名稱、地址、電話及原產地
-6. 有效日期或製造日期（須清楚標示年月日）
-7. 保存期限、保存方法與條件
-8. 適用寵物種類、使用方法及注意事項
-
-【禁止標示/廣告內容（依《動物保護法》第22-5條第2項）】
-- 不得有不實、誇張或易生誤解之情形
-- 不得宣稱「預防」「改善」「治療」「減輕」特定動物疾病
-- 禁止用詞：預防皮膚炎、消除紅腫、預防白內障、防止脫毛、降血壓、抗炎
-- 「無添加」「不使用」等詞須載明具體成分名稱，否則視為不實
-- 「獲獎」「認證」等詞須說明授獎機構、時間及獎項名稱
-
-【合法正面宣稱（不視為誇大）】
-維持：體型、活力、消化道機能、關節健康、心臟功能
-保健：視力、口腔、皮膚、骨質
-幫助：維護牙齦健康、控制牙垢形成`;
+4. 罰則 → 違反第22-5條：依《動物保護法》第29條，限期改善後可處 3~15萬元罰鍰`;
 
 const COL_VARIANTS = {
   品號: ["品號", "產品編號", "品號 (productCode)", "貨 號", "貨號"],
@@ -100,7 +72,12 @@ function buildProductIndex(workbook) {
       const row = raw[i];
       const pn = String(row[colMap["品號"]] || "").trim();
       if (pn && !pn.startsWith("#") && pn !== "undefined" && !index[pn]) {
-        index[pn] = { sheetName, data: Object.fromEntries(Object.entries(colMap).map(([f, idx]) => [f, idx >= 0 ? String(row[idx] || "").trim() : ""])) };
+        index[pn] = {
+          sheetName,
+          data: Object.fromEntries(
+            Object.entries(colMap).map(([f, idx]) => [f, idx >= 0 ? String(row[idx] || "").trim() : ""]),
+          ),
+        };
         count++;
       }
     }
@@ -145,7 +122,9 @@ function parseRels(relsXml) {
 async function parsePptx(file) {
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
-  const slideKeys = Object.keys(zip.files).filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f)).sort((a, b) => +a.match(/(\d+)\.xml$/)[1] - +b.match(/(\d+)\.xml$/)[1]);
+  const slideKeys = Object.keys(zip.files)
+    .filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f))
+    .sort((a, b) => +a.match(/(\d+)\.xml$/)[1] - +b.match(/(\d+)\.xml$/)[1]);
 
   const allImages = [];
   const seenMedia = new Set();
@@ -189,9 +168,12 @@ function App() {
   const [dbMeta, setDbMeta] = useState(null);
   const [dbInit, setDbInit] = useState(false);
   const [productCount, setProductCount] = useState(0);
+
   const [allImages, setAllImages] = useState([]);
   const [formData, setFormData] = useState({});
   const [err, setErr] = useState("");
+  const [stage, setStage] = useState("upload");
+  const [groups, setGroups] = useState([]);
 
   useEffect(() => {
     (async () => {
@@ -236,6 +218,9 @@ function App() {
 
     try {
       setErr("");
+      setGroups([]);
+      setStage("upload");
+
       if (pptx) {
         const parsed = await parsePptx(pptx);
         setAllImages(parsed.allImages);
@@ -259,12 +244,56 @@ function App() {
     }
   }, []);
 
+  const removeImage = (idx) => {
+    setAllImages((prev) => prev.filter((_, i) => i !== idx));
+    setGroups((prev) =>
+      prev
+        .map((g) => ({
+          ...g,
+          imageIndices: g.imageIndices
+            .filter((i) => i !== idx)
+            .map((i) => (i > idx ? i - 1 : i)),
+        }))
+        .filter((g) => g.imageIndices.length > 0),
+    );
+  };
+
+  const createInitialGroup = () => {
+    if (!allImages.length) {
+      setErr("請先上傳至少一張圖片後再進下一步。");
+      return;
+    }
+    setErr("");
+    setGroups([
+      {
+        id: 0,
+        label: "商品一",
+        pn: formData["品號"] || "",
+        imageIndices: allImages.map((_, i) => i),
+      },
+    ]);
+    setStage("grouping");
+  };
+
+  const updateGroup = (gid, patch) => setGroups((prev) => prev.map((g, i) => (i === gid ? { ...g, ...patch } : g)));
+
+  const splitToNewGroup = (imgIdx, gid) => {
+    setGroups((prev) => {
+      const next = prev.map((g, i) =>
+        i === gid ? { ...g, imageIndices: g.imageIndices.filter((x) => x !== imgIdx) } : g,
+      );
+      const cleaned = next.filter((g) => g.imageIndices.length > 0);
+      cleaned.push({ id: Date.now(), label: `商品${cleaned.length + 1}`, pn: "", imageIndices: [imgIdx] });
+      return cleaned;
+    });
+  };
+
   if (!dbInit) return null;
 
   return (
     <main className="container">
       <h1>寵物食品包裝法規校稿系統</h1>
-      <p className="muted">現在 index.html 已可直接掛載 App.jsx（React + Babel），不需 bundler 也能跑。</p>
+      <p className="muted">已補上「下一步」流程與「手動刪圖」功能。</p>
 
       <section className="card">
         <h2>產品總表 Excel</h2>
@@ -276,22 +305,66 @@ function App() {
         <h2>包裝檔案（圖片 / PPTX）</h2>
         <input type="file" multiple accept="image/*,.pptx,.ppt" onChange={(e) => handleFiles(e.target.files)} />
         <p>已載入圖片數：{allImages.length}</p>
-        {allImages.length > 0 && (
-          <div className="grid">
-            {allImages.map((img, i) => (
-              <figure key={i} className="thumb">
-                <img src={img.dataUrl} alt={img.name} />
-                <figcaption>圖 {i + 1}：{img.name}</figcaption>
-              </figure>
-            ))}
-          </div>
-        )}
+
         {Object.keys(formData).length > 0 && <pre>{JSON.stringify(formData, null, 2)}</pre>}
+
+        {allImages.length > 0 && (
+          <>
+            <div className="grid">
+              {allImages.map((img, i) => (
+                <figure key={`${img.name}-${i}`} className="thumb">
+                  <img src={img.dataUrl} alt={img.name} />
+                  <figcaption>
+                    圖 {i + 1}：{img.name}
+                    <button className="danger" onClick={() => removeImage(i)}>刪除</button>
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+            <div className="actions">
+              <button className="primary" onClick={createInitialGroup}>下一步：建立商品分組</button>
+            </div>
+          </>
+        )}
       </section>
+
+      {stage === "grouping" && (
+        <section className="card">
+          <h2>商品分組（可繼續調整）</h2>
+          <p className="muted">現在你可以編輯品號，或把某張圖拆成新商品群組。</p>
+          {groups.map((g, gi) => (
+            <div key={g.id} className="groupCard">
+              <div className="groupHead">
+                <input value={g.label} onChange={(e) => updateGroup(gi, { label: e.target.value })} />
+                <label>
+                  品號：
+                  <input value={g.pn} onChange={(e) => updateGroup(gi, { pn: e.target.value })} />
+                </label>
+              </div>
+              <div className="grid">
+                {g.imageIndices.map((idx) => {
+                  const img = allImages[idx];
+                  if (!img) return null;
+                  return (
+                    <figure key={`g-${gi}-${idx}`} className="thumb selected">
+                      <img src={img.dataUrl} alt={img.name} />
+                      <figcaption>
+                        圖 {idx + 1}
+                        <button className="ghost" onClick={() => splitToNewGroup(idx, gi)}>拆成新商品</button>
+                      </figcaption>
+                    </figure>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          <p className="ok">✅ 已可進入下一步分組流程（後續可再接審核邏輯）。</p>
+        </section>
+      )}
 
       <section className="card">
         <h2>法規知識庫（節錄）</h2>
-        <pre>{LEGAL_KNOWLEDGE.slice(0, 300)}...</pre>
+        <pre>{LEGAL_KNOWLEDGE}</pre>
       </section>
 
       {err && <p className="error">⚠️ {err}</p>}
