@@ -214,6 +214,35 @@ function isValidForField(field, value) {
   return true;
 }
 
+function normalizeBarcodeCandidate(value) {
+  const map = { O: "0", o: "0", I: "1", l: "1", S: "5", B: "8", Z: "2" };
+  return String(value || "")
+    .replace(/[OolISBZ]/g, (ch) => map[ch] || ch)
+    .replace(/[^0-9]/g, "");
+}
+
+function getPnVariants(pn) {
+  const base = normalizePn(pn);
+  if (!base) return [];
+  const variants = new Set([base]);
+  const swaps = [
+    ["O", "0"],
+    ["0", "O"],
+    ["I", "1"],
+    ["1", "I"],
+    ["Z", "2"],
+    ["2", "Z"],
+    ["S", "5"],
+    ["5", "S"],
+    ["B", "8"],
+    ["8", "B"],
+  ];
+  for (const [a, b] of swaps) {
+    if (base.includes(a)) variants.add(base.replaceAll(a, b));
+  }
+  return [...variants];
+}
+
 function parseDraftFromOcr(rawText, fallbackName = "", formData = {}) {
   const text = String(rawText || "").split("\r").join("\n");
   const rawLines = text.split("\n").map((x) => x.trim()).filter(Boolean);
@@ -247,11 +276,15 @@ function parseDraftFromOcr(rawText, fallbackName = "", formData = {}) {
     .find((x) => /[A-Z]/.test(x) && /\d/.test(x));
   const pn = normalizePn(pnLabeled || pnFromForm || pnExact10 || pnGeneric || "");
 
-  const barcodeLabeled = pickFirstMatch(lines, [
-    /(?:條碼|國際條碼|barcode)\s*[:：]?\s*(\d{8,14})/i,
+  const barcodeLine = pickFirstMatch(lines, [
+    /(?:條碼|國際條碼|barcode)\s*[:：]?\s*([A-Za-z0-9\s-]{8,24})/i,
   ]);
-  const barcodeGeneric = (text.match(/\b(\d{8,14})\b/) || [])[1] || "";
-  const barcode = (barcodeLabeled || barcodeGeneric || "").trim();
+  const barcodeLabeled = normalizeBarcodeCandidate(barcodeLine);
+  const barcodeGenericRaw = (text.match(/\b([A-Za-z0-9-]{8,20})\b/g) || [])
+    .map((x) => normalizeBarcodeCandidate(x))
+    .find((x) => x.length >= 8 && x.length <= 14) || "";
+  const barcode = (barcodeLabeled || barcodeGenericRaw || "").trim();
+
 
   const nameLabeled = pickFirstMatch(lines, [
     /(?:品名|產品名稱)\s*[:：]\s*(.{2,40})/i,
@@ -411,7 +444,14 @@ function createPnResolver(productIndex) {
   Object.entries(productIndex || {}).forEach(([pn, entry]) => {
     map.set(normalizePn(pn), entry);
   });
-  return (pn) => map.get(normalizePn(pn)) || null;
+  return (pn) => {
+    const exact = map.get(normalizePn(pn));
+    if (exact) return exact;
+    for (const v of getPnVariants(pn)) {
+      if (map.has(v)) return map.get(v);
+    }
+    return null;
+  };
 }
 
 
@@ -433,6 +473,19 @@ function App() {
   const [productCount, setProductCount] = useState(0);
   const [productIndex, setProductIndex] = useState({});
   const getProductByPn = createPnResolver(productIndex);
+  const findProductFallback = (draft) => {
+    const barcode = String(draft?.條碼 || "").trim();
+    const nameNorm = normalizeText(draft?.品名 || "");
+    if (barcode) {
+      const byBarcode = Object.values(productIndex || {}).find((e) => String(e?.data?.條碼 || "").trim() === barcode);
+      if (byBarcode) return byBarcode;
+    }
+    if (nameNorm) {
+      const byName = Object.values(productIndex || {}).find((e) => normalizeText(e?.data?.品名) === nameNorm);
+      if (byName) return byName;
+    }
+    return null;
+  };
 
   const [allImages, setAllImages] = useState([]);
   const [formData, setFormData] = useState({});
@@ -612,11 +665,18 @@ function App() {
           if (!img?.dataUrl) continue;
           setOcrMsg(`OCR 辨識中：${g.label || `商品${gi + 1}`}（第 ${ii + 1}/${g.imageIndices.length} 張）`);
           const prepared = await preprocessImageForOcr(img.dataUrl);
-          const result = await Tesseract.recognize(prepared, "chi_tra+eng", {
+          const pass1 = await Tesseract.recognize(prepared, "chi_tra+eng", {
             tessedit_pageseg_mode: "6",
             preserve_interword_spaces: "1",
           });
-          const textOut = (result?.data?.text || "").trim();
+          const pass2 = await Tesseract.recognize(prepared, "chi_tra+eng", {
+            tessedit_pageseg_mode: "11",
+            preserve_interword_spaces: "1",
+          });
+          const t1 = String(pass1?.data?.text || "").trim();
+          const t2 = String(pass2?.data?.text || "").trim();
+          const textOut = [t1, t2].filter(Boolean).join("
+").trim();
           if (textOut) texts.push(textOut);
         }
 
@@ -687,7 +747,8 @@ function App() {
             productName: g.pkgDraft?.品名 || g.label,
           })[0] || "";
       }
-      const found = pn ? getProductByPn(pn) : null;
+      let found = pn ? getProductByPn(pn) : null;
+      if (!found) found = findProductFallback({ ...g.pkgDraft, 品號: pn });
       const mergedDraft = { ...g.pkgDraft, 品號: pn };
       const comparison = compareWithDb(mergedDraft, found);
       const checklist = buildGroupChecklist(g);
