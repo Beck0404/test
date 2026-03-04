@@ -196,7 +196,7 @@ function pickFirstMatch(lines, patterns) {
 function isValidForField(field, value) {
   const v = String(value || "").trim();
   if (!v) return false;
-  if (field === "品號") return /^[A-Z0-9-]{3,16}$/i.test(v) && /[A-Z]/i.test(v) && /\d/.test(v);
+  if (field === "品號") return /^[A-Z0-9-]{8,16}$/i.test(v) && /[A-Z]/i.test(v) && /\d/.test(v);
   if (field === "條碼") return /^\d{8,14}$/.test(v);
   if (field === "品名") return v.length >= 2 && v.length <= 40 && !/[{}<>]/.test(v);
   if (field === "淨重") return /(kg|g|mg|ml|l|公斤|公克|毫升)/i.test(v) && /\d/.test(v);
@@ -205,7 +205,7 @@ function isValidForField(field, value) {
   return true;
 }
 
-function parseDraftFromOcr(rawText, fallbackName = "") {
+function parseDraftFromOcr(rawText, fallbackName = "", formData = {}) {
   const text = String(rawText || "").split("\r").join("\n");
   const rawLines = text.split("\n").map((x) => x.trim()).filter(Boolean);
   const lines = rawLines.map((line) => line.replace(/[｜|]/g, " ").replace(/\s+/g, " ").trim());
@@ -226,11 +226,17 @@ function parseDraftFromOcr(rawText, fallbackName = "") {
   };
 
   const pnLabeled = pickFirstMatch(lines, [
-    /(?:品號|產品編號|貨號)\s*[:：]\s*([A-Z0-9-]{3,16})/i,
-    /(?:品號|產品編號|貨號)\s+([A-Z0-9-]{3,16})/i,
+    /(?:品號|產品編號|貨號)\s*[:：]\s*([A-Z0-9-]{8,16})/i,
+    /(?:品號|產品編號|貨號)\s+([A-Z0-9-]{8,16})/i,
   ]);
-  const pnGeneric = (text.match(/\b([A-Z]{1,5}\d{2,}[A-Z0-9-]{0,8})\b/i) || [])[1] || "";
-  const pn = normalizePn(pnLabeled || pnGeneric);
+  const pnFromForm = normalizePn(formData?.品號 || formData?.產品編號 || "");
+  const pnExact10 = (text.match(/\b([A-Z0-9]{10})\b/g) || [])
+    .map((x) => normalizePn(x))
+    .find((x) => /[A-Z]/.test(x) && /\d/.test(x));
+  const pnGeneric = (text.match(/\b([A-Z0-9]{8,16})\b/g) || [])
+    .map((x) => normalizePn(x))
+    .find((x) => /[A-Z]/.test(x) && /\d/.test(x));
+  const pn = normalizePn(pnLabeled || pnFromForm || pnExact10 || pnGeneric || "");
 
   const barcodeLabeled = pickFirstMatch(lines, [
     /(?:條碼|國際條碼|barcode)\s*[:：]?\s*(\d{8,14})/i,
@@ -362,7 +368,7 @@ function detectPnCandidates({ formData, allImages, productIndex, productName }) 
   const addIfPnLike = (text) => {
     if (!text) return;
     const val = normalizePn(text);
-    if (/^[A-Z0-9][A-Z0-9-]{2,}$/.test(val) && /[A-Z]/.test(val) && /\d/.test(val)) candidates.add(val);
+    if (/^[A-Z0-9-]{8,16}$/.test(val) && /[A-Z]/.test(val) && /\d/.test(val)) candidates.add(val);
   };
 
   addIfPnLike(formData["品號"] || formData["產品編號"] || formData["productCode"]);
@@ -597,7 +603,7 @@ function App() {
         }
 
         const mergedText = texts.join("\n").trim();
-        const guessed = parseDraftFromOcr(mergedText, g.label || "");
+        const guessed = parseDraftFromOcr(mergedText, g.label || "", formData);
         const nextDraft = { ...g.pkgDraft };
         COMPARE_FIELDS.forEach((f) => {
           const cand = String(guessed[f.key] || "").trim();
