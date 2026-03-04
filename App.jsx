@@ -43,6 +43,7 @@ function findCol(headers, variants) {
 function buildProductIndex(workbook) {
   const index = {};
   const sheetSummary = [];
+
   for (const sheetName of workbook.SheetNames) {
     const ws = workbook.Sheets[sheetName];
     const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
@@ -74,15 +75,14 @@ function buildProductIndex(workbook) {
       if (pn && !pn.startsWith("#") && pn !== "undefined" && !index[pn]) {
         index[pn] = {
           sheetName,
-          data: Object.fromEntries(
-            Object.entries(colMap).map(([f, idx]) => [f, idx >= 0 ? String(row[idx] || "").trim() : ""]),
-          ),
+          data: Object.fromEntries(Object.entries(colMap).map(([f, idx]) => [f, idx >= 0 ? String(row[idx] || "").trim() : ""])),
         };
-        count++;
+        count += 1;
       }
     }
     if (count > 0) sheetSummary.push({ sheetName, count });
   }
+
   return { index, sheetSummary };
 }
 
@@ -95,10 +95,10 @@ async function loadJSZip() {
 }
 
 function blobToDataUrl(blob) {
-  return new Promise((res) => {
-    const r = new FileReader();
-    r.onload = (e) => res(e.target.result);
-    r.readAsDataURL(blob);
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.readAsDataURL(blob);
   });
 }
 
@@ -143,18 +143,18 @@ async function parsePptx(file) {
       const blob = await zip.files[mediaPath].async("blob");
       const dataUrl = await blobToDataUrl(blob);
       const name = mediaPath.split("/").pop();
-      allImages.push({ dataUrl, name, slideIndex: si, file: new File([blob], name, { type: blob.type || "image/png" }) });
+      allImages.push({ dataUrl, name, slideIndex: si });
     }
   }
 
   const formData = {};
   if (slideKeys[0]) {
     const s1xml = await zip.files[slideKeys[0]].async("text");
-    const s1paras = xmlParas(s1xml);
-    for (let i = 0; i < s1paras.length - 1; i++) {
-      const p = s1paras[i];
+    const paras = xmlParas(s1xml);
+    for (let i = 0; i < paras.length - 1; i++) {
+      const p = paras[i];
       if ((p.endsWith(":") || p.endsWith("：")) && p.length < 20) {
-        const val = s1paras[i + 1];
+        const val = paras[i + 1];
         if (val && val.length < 100 && !val.endsWith(":") && !val.endsWith("：")) formData[p.slice(0, -1).trim()] = val;
       }
     }
@@ -163,26 +163,47 @@ async function parsePptx(file) {
   return { allImages, formData };
 }
 
+function quickLegalReview(group, imageCount, productIndex, formData) {
+  const missing = [];
+  if (!group.pn) missing.push("未填品號");
+  if (!imageCount) missing.push("此商品沒有圖片");
+  if (!formData["品名"] && !formData["產品名稱"]) missing.push("申請資訊中未提供品名");
+
+  const inDb = group.pn ? productIndex[group.pn] : null;
+  const dbNote = inDb ? `產品總表有此品號（分頁：${inDb.sheetName}）` : group.pn ? "產品總表查無此品號" : "未提供品號，無法做總表比對";
+  const score = Math.max(0, 100 - missing.length * 20 - (inDb ? 0 : 10));
+
+  return {
+    score,
+    dbNote,
+    missing,
+    advice: missing.length ? "請先補齊缺漏欄位後再送法規審核。" : "可進一步串接 OCR/LLM 進行逐字法規審核。",
+  };
+}
+
 function App() {
   const [dbReady, setDbReady] = useState(false);
   const [dbMeta, setDbMeta] = useState(null);
   const [dbInit, setDbInit] = useState(false);
   const [productCount, setProductCount] = useState(0);
+  const [productIndex, setProductIndex] = useState({});
 
   const [allImages, setAllImages] = useState([]);
   const [formData, setFormData] = useState({});
   const [err, setErr] = useState("");
-  const [stage, setStage] = useState("upload");
+  const [stage, setStage] = useState("upload"); // upload | grouping | done
   const [groups, setGroups] = useState([]);
+  const [reports, setReports] = useState([]);
 
   useEffect(() => {
     (async () => {
       try {
         const r = await storageApi.get("petfood-db-v3");
         if (r?.value) {
-          const s = JSON.parse(r.value);
-          setDbMeta(s.meta || null);
-          setProductCount(Object.keys(s.index || {}).length);
+          const data = JSON.parse(r.value);
+          setDbMeta(data.meta || null);
+          setProductIndex(data.index || {});
+          setProductCount(Object.keys(data.index || {}).length);
           setDbReady(true);
         }
       } finally {
@@ -202,6 +223,7 @@ function App() {
         const meta = { filename: file.name, count: Object.keys(index).length, sheets: sheetSummary.length, updatedAt: new Date().toLocaleString("zh-TW") };
         await storageApi.set("petfood-db-v3", JSON.stringify({ index, sheetSummary, meta }));
         setDbMeta(meta);
+        setProductIndex(index);
         setProductCount(meta.count);
         setDbReady(true);
       } catch (e2) {
@@ -219,6 +241,7 @@ function App() {
     try {
       setErr("");
       setGroups([]);
+      setReports([]);
       setStage("upload");
 
       if (pptx) {
@@ -229,10 +252,10 @@ function App() {
         const loaded = await Promise.all(
           imgs.map(
             (f) =>
-              new Promise((res) => {
-                const r = new FileReader();
-                r.onload = (e) => res({ dataUrl: e.target.result, name: f.name, slideIndex: 0 });
-                r.readAsDataURL(f);
+              new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve({ dataUrl: e.target.result, name: f.name, slideIndex: 0 });
+                reader.readAsDataURL(f);
               }),
           ),
         );
@@ -248,12 +271,7 @@ function App() {
     setAllImages((prev) => prev.filter((_, i) => i !== idx));
     setGroups((prev) =>
       prev
-        .map((g) => ({
-          ...g,
-          imageIndices: g.imageIndices
-            .filter((i) => i !== idx)
-            .map((i) => (i > idx ? i - 1 : i)),
-        }))
+        .map((g) => ({ ...g, imageIndices: g.imageIndices.filter((i) => i !== idx).map((i) => (i > idx ? i - 1 : i)) }))
         .filter((g) => g.imageIndices.length > 0),
     );
   };
@@ -264,14 +282,7 @@ function App() {
       return;
     }
     setErr("");
-    setGroups([
-      {
-        id: 0,
-        label: "商品一",
-        pn: formData["品號"] || "",
-        imageIndices: allImages.map((_, i) => i),
-      },
-    ]);
+    setGroups([{ id: 0, label: "商品一", pn: formData["品號"] || "", imageIndices: allImages.map((_, i) => i) }]);
     setStage("grouping");
   };
 
@@ -279,21 +290,34 @@ function App() {
 
   const splitToNewGroup = (imgIdx, gid) => {
     setGroups((prev) => {
-      const next = prev.map((g, i) =>
-        i === gid ? { ...g, imageIndices: g.imageIndices.filter((x) => x !== imgIdx) } : g,
-      );
+      const next = prev.map((g, i) => (i === gid ? { ...g, imageIndices: g.imageIndices.filter((x) => x !== imgIdx) } : g));
       const cleaned = next.filter((g) => g.imageIndices.length > 0);
       cleaned.push({ id: Date.now(), label: `商品${cleaned.length + 1}`, pn: "", imageIndices: [imgIdx] });
       return cleaned;
     });
   };
 
+  const runReview = () => {
+    if (!groups.length) {
+      setErr("請先建立至少一個商品分組。");
+      return;
+    }
+    const output = groups.map((g) => {
+      const result = quickLegalReview(g, g.imageIndices.length, productIndex, formData);
+      return { group: g, ...result };
+    });
+    setReports(output);
+    setStage("done");
+  };
+
+  const backToGrouping = () => setStage("grouping");
+
   if (!dbInit) return null;
 
   return (
     <main className="container">
       <h1>寵物食品包裝法規校稿系統</h1>
-      <p className="muted">已補上「下一步」流程與「手動刪圖」功能。</p>
+      <p className="muted">流程已補齊：上傳 → 分組 → 產生檢核結果。</p>
 
       <section className="card">
         <h2>產品總表 Excel</h2>
@@ -328,10 +352,10 @@ function App() {
         )}
       </section>
 
-      {stage === "grouping" && (
+      {(stage === "grouping" || stage === "done") && (
         <section className="card">
-          <h2>商品分組（可繼續調整）</h2>
-          <p className="muted">現在你可以編輯品號，或把某張圖拆成新商品群組。</p>
+          <h2>商品分組</h2>
+          <p className="muted">調整完群組後，請按「執行法規檢核」。</p>
           {groups.map((g, gi) => (
             <div key={g.id} className="groupCard">
               <div className="groupHead">
@@ -358,7 +382,31 @@ function App() {
               </div>
             </div>
           ))}
-          <p className="ok">✅ 已可進入下一步分組流程（後續可再接審核邏輯）。</p>
+          <div className="actions">
+            {stage === "done" && <button className="ghost" onClick={backToGrouping}>返回分組調整</button>}
+            <button className="primary" onClick={runReview}>執行法規檢核</button>
+          </div>
+        </section>
+      )}
+
+      {stage === "done" && (
+        <section className="card">
+          <h2>檢核結果</h2>
+          {reports.map((r, i) => (
+            <div key={i} className="resultCard">
+              <h3>{r.group.label}（{r.group.pn || "未填品號"}）</h3>
+              <p>合規評分：<strong>{r.score}</strong> / 100</p>
+              <p>總表比對：{r.dbNote}</p>
+              {r.missing.length > 0 ? (
+                <ul>
+                  {r.missing.map((m, mi) => <li key={mi}>{m}</li>)}
+                </ul>
+              ) : (
+                <p className="ok">✅ 目前沒有偵測到基礎缺漏。</p>
+              )}
+              <p className="muted">建議：{r.advice}</p>
+            </div>
+          ))}
         </section>
       )}
 
