@@ -191,7 +191,7 @@ function compareWithDb(pkgDraft, dbRow) {
     if (match === false) note = "內容不一致";
     if (!pkgNorm && dbNorm) note = "包裝草稿未填";
     if (pkgNorm && !dbNorm) note = "總表無資料";
-    return { field: f.label, onPkg, inDb, match, note };
+    return { key: f.key, field: f.label, onPkg, inDb, match, note };
   });
 
   const matched = rows.filter((r) => r.match === true).length;
@@ -236,42 +236,16 @@ function createPnResolver(productIndex) {
   return (pn) => map.get(normalizePn(pn)) || null;
 }
 
-function inferDraftFromDb({ formData, allImages, productIndex, getProductByPn }) {
-  const pnCandidates = detectPnCandidates({
-    formData,
-    allImages,
-    productIndex,
-    productName: formData["品名"] || formData["產品名稱"] || "",
-  });
-  for (const pn of pnCandidates) {
-    const row = getProductByPn(pn);
-    if (!row) continue;
-    return {
-      品號: pn,
-      品名: formData["品名"] || formData["產品名稱"] || row.data.品名 || "",
-      條碼: formData["條碼"] || row.data.條碼 || "",
-      成份: row.data.成份 || "",
-      分析值: row.data.分析值 || "",
-      淨重: formData["淨重"] || formData["規格"] || row.data.淨重 || "",
-    };
-  }
 
-  const context = `${JSON.stringify(formData || {})} ${(allImages || []).map((x) => x.name || "").join(" ")}`;
-  const contextNorm = normalizeText(context);
-  for (const [pn, row] of Object.entries(productIndex || {})) {
-    const nameNorm = normalizeText(row?.data?.品名);
-    if (nameNorm && contextNorm.includes(nameNorm)) {
-      return {
-        品號: normalizePn(pn),
-        品名: row.data.品名 || "",
-        條碼: row.data.條碼 || "",
-        成份: row.data.成份 || "",
-        分析值: row.data.分析值 || "",
-        淨重: row.data.淨重 || "",
-      };
-    }
-  }
-  return null;
+function buildGroupChecklist(group) {
+  const draft = group?.pkgDraft || {};
+  const requiredMissing = [];
+  if (!normalizePn(group?.pn || draft.品號)) requiredMissing.push("品號");
+  if (!String(draft.品名 || "").trim()) requiredMissing.push("品名");
+  return {
+    requiredMissing,
+    ready: requiredMissing.length === 0,
+  };
 }
 
 function App() {
@@ -384,13 +358,6 @@ function App() {
       淨重: formData["淨重"] || formData["規格"] || "",
     };
 
-    const inferred = inferDraftFromDb({ formData, allImages, productIndex, getProductByPn });
-    if (inferred) {
-      COMPARE_FIELDS.forEach((f) => {
-        if (!initialDraft[f.key] && inferred[f.key]) initialDraft[f.key] = inferred[f.key];
-      });
-    }
-
     const detectedPn = detectPnCandidates({ formData, allImages, productIndex, productName: initialDraft.品名 })[0] || "";
     if (!initialDraft.品號 && detectedPn) initialDraft.品號 = detectedPn;
 
@@ -415,24 +382,15 @@ function App() {
     );
 
   const updateGroupDraft = (gid, key, value) => {
-    setGroups((prev) => prev.map((g, i) => (i === gid ? { ...g, pkgDraft: { ...g.pkgDraft, [key]: value } } : g)));
-  };
-
-  const autofillFromDb = (gid) => {
     setGroups((prev) =>
-      prev.map((g, i) => {
-        if (i !== gid) return g;
-        const found = g.pn ? getProductByPn(g.pn) : null;
-        if (!found) {
-          setErr(g.pn ? `品號 ${g.pn} 在總表中查無資料，無法補欄位。` : "請先輸入或自動抓到品號，再補入總表欄位。");
-          return g;
-        }
-        const nextDraft = { ...g.pkgDraft };
-        COMPARE_FIELDS.forEach((f) => {
-          if (!nextDraft[f.key] && found.data[f.key]) nextDraft[f.key] = found.data[f.key];
-        });
-        return { ...g, pkgDraft: nextDraft };
-      }),
+      prev.map((g, i) =>
+        i === gid
+          ? {
+              ...g,
+              pkgDraft: { ...g.pkgDraft, [key]: value },
+            }
+          : g,
+      ),
     );
   };
 
@@ -440,14 +398,12 @@ function App() {
     setGroups((prev) => {
       const next = prev.map((g, i) => (i === gid ? { ...g, imageIndices: g.imageIndices.filter((x) => x !== imgIdx) } : g));
       const cleaned = next.filter((g) => g.imageIndices.length > 0);
-      const oneImage = [allImages[imgIdx]].filter(Boolean);
-      const inferred = inferDraftFromDb({ formData: {}, allImages: oneImage, productIndex, getProductByPn });
       cleaned.push({
         id: Date.now(),
-        label: inferred?.品名 || `商品${cleaned.length + 1}`,
-        pn: inferred?.品號 || "",
+        label: `商品${cleaned.length + 1}`,
+        pn: "",
         imageIndices: [imgIdx],
-        pkgDraft: { 品號: inferred?.品號 || "", 品名: inferred?.品名 || "", 條碼: inferred?.條碼 || "", 成份: inferred?.成份 || "", 分析值: inferred?.分析值 || "", 淨重: inferred?.淨重 || "" },
+        pkgDraft: { 品號: "", 品名: "", 條碼: "", 成份: "", 分析值: "", 淨重: "" },
       });
       return cleaned;
     });
@@ -458,13 +414,29 @@ function App() {
       setErr("請先建立至少一個商品分組。");
       return;
     }
-    setErr("");
+    const needFix = groups
+      .map((g) => ({ label: g.label || "未命名商品", check: buildGroupChecklist(g) }))
+      .filter((x) => !x.check.ready);
+    if (needFix.length) {
+      setErr(`以下商品尚未填完必要欄位（品號/品名）：${needFix.map((x) => x.label).join("、")}`);
+    } else {
+      setErr("");
+    }
     setStage("confirm");
   };
 
   const runReview = () => {
     if (!groups.length) {
       setErr("請先建立至少一個商品分組。");
+      return;
+    }
+
+    const blockers = groups
+      .map((g) => ({ label: g.label || "未命名商品", check: buildGroupChecklist(g) }))
+      .filter((x) => !x.check.ready);
+    if (blockers.length) {
+      setErr(`無法送檢：以下商品缺少必要欄位（品號/品名）：${blockers.map((x) => x.label).join("、")}`);
+      setStage("confirm");
       return;
     }
 
@@ -482,19 +454,21 @@ function App() {
       const found = pn ? getProductByPn(pn) : null;
       const mergedDraft = { ...g.pkgDraft, 品號: pn };
       const comparison = compareWithDb(mergedDraft, found);
+      const checklist = buildGroupChecklist(g);
 
       const missing = [];
       if (!mergedDraft.品名) missing.push("包裝草稿未提供品名");
       if (!mergedDraft.品號) missing.push("包裝草稿未提供品號（已嘗試自動抓取）");
       if (!g.imageIndices.length) missing.push("此商品沒有圖片");
 
-      const score = Math.max(0, 100 - missing.length * 15 - comparison.mismatched * 8 - (found ? 0 : 10));
+      const score = Math.max(0, 100 - missing.length * 10 - comparison.mismatched * 8 - (found ? 0 : 10));
 
       return {
         group: g,
         pn,
         found,
         comparison,
+        checklist,
         missing,
         score,
       };
@@ -510,6 +484,15 @@ function App() {
     <main className="container">
       <h1>寵物食品包裝法規校稿系統</h1>
       <p className="muted">流程：上傳 → 分組 → 確認可編輯文字草稿 → 檢核結果</p>
+      <section className="card">
+        <h2>使用流程建議（先確認再比對）</h2>
+        <ol className="flowList">
+          <li>先上傳圖片/PPT，刪掉不相關圖片。</li>
+          <li>在「商品分組」填好每個商品的品名與品號。</li>
+          <li>在「包裝擷取文字」僅以你上傳的包裝圖片/PPT內容人工填寫，不使用總表反向補值。</li>
+          <li>送檢前確認必要欄位（品號、品名）已完成，再看差異報告。</li>
+        </ol>
+      </section>
 
       <section className="card">
         <h2>產品總表 Excel</h2>
@@ -550,11 +533,19 @@ function App() {
           {groups.map((g, gi) => (
             <div key={g.id} className="groupCard">
               <div className="groupHead">
-                <input value={g.label} onChange={(e) => updateGroup(gi, { label: e.target.value })} />
                 <label>
-                  品號：
+                  商品名稱（群組名稱）：
+                  <input
+                    value={g.label}
+                    placeholder="例如：活力零食 雞肉切片"
+                    onChange={(e) => updateGroup(gi, { label: e.target.value })}
+                  />
+                </label>
+                <label>
+                  品號（產品編號）：
                   <input
                     value={g.pn}
+                    placeholder="例如：GL01、TPRL01J"
                     onChange={(e) => {
                       const v = e.target.value;
                       updateGroup(gi, { pn: v });
@@ -562,7 +553,7 @@ function App() {
                     }}
                   />
                 </label>
-                <button className="ghost" onClick={() => autofillFromDb(gi)}>從總表補入空白欄位</button>
+
               </div>
               <div className="grid">
                 {g.imageIndices.map((idx) => {
@@ -591,11 +582,19 @@ function App() {
 
       {(stage === "confirm" || stage === "done") && (
         <section className="card">
-          <h2>包裝擷取文字（可編輯確認）</h2>
-          <p className="muted">檢核前可先人工修正欄位，會用這份資料比對總表。</p>
+          <h2>包裝擷取文字（人工確認草稿）</h2>
+          <p className="muted">目前系統不會自動 OCR 讀圖；請僅依你上傳的包裝圖片/PPT人工填寫與確認。</p>
           {groups.map((g, gi) => (
             <div key={`draft-${g.id}`} className="resultCard">
               <h3>{g.label}</h3>
+              {(() => {
+                const ck = buildGroupChecklist(g);
+                return (
+                  <p className={ck.ready ? "ok" : "warn"}>
+                    {ck.ready ? "✅ 必要欄位已填寫（可送檢）" : `⚠️ 缺少必要欄位：${ck.requiredMissing.join("、")}`}
+                  </p>
+                );
+              })()}
               <div className="formGrid">
                 {COMPARE_FIELDS.map((f) => (
                   <label key={`${g.id}-${f.key}`}>
