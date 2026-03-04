@@ -6,6 +6,15 @@ const LEGAL_KNOWLEDGE = `【正確法規架構】
 3. 廣告/宣傳用詞規範 → 《動物保護法》第22-5條第2項＋《寵物食品標示宣傳廣告涉及不實誇張或易生誤解認定原則》（113年7月1日生效）
 4. 罰則 → 違反第22-5條：依《動物保護法》第29條，限期改善後可處 3~15萬元罰鍰`;
 
+const COMPARE_FIELDS = [
+  { key: "品號", label: "品號" },
+  { key: "條碼", label: "條碼" },
+  { key: "品名", label: "品名" },
+  { key: "成份", label: "成份" },
+  { key: "分析值", label: "分析值" },
+  { key: "淨重", label: "淨重" },
+];
+
 const COL_VARIANTS = {
   品號: ["品號", "產品編號", "品號 (productCode)", "貨 號", "貨號"],
   條碼: ["國條", "條  碼", "條碼(方便複製)", "亞馬遜條碼"],
@@ -26,6 +35,10 @@ const storageApi = {
     localStorage.setItem(key, value);
   },
 };
+
+function normalizeText(value) {
+  return String(value || "").replace(/\s+/g, "").trim().toLowerCase();
+}
 
 function findCol(headers, variants) {
   for (const v of variants) {
@@ -163,22 +176,52 @@ async function parsePptx(file) {
   return { allImages, formData };
 }
 
-function quickLegalReview(group, imageCount, productIndex, formData) {
-  const missing = [];
-  if (!group.pn) missing.push("未填品號");
-  if (!imageCount) missing.push("此商品沒有圖片");
-  if (!formData["品名"] && !formData["產品名稱"]) missing.push("申請資訊中未提供品名");
+function compareWithDb(pkgDraft, dbRow) {
+  const rows = COMPARE_FIELDS.map((f) => {
+    const onPkg = pkgDraft[f.key] || "";
+    const inDb = dbRow?.data?.[f.key] || "";
+    const pkgNorm = normalizeText(onPkg);
+    const dbNorm = normalizeText(inDb);
+    const match = pkgNorm && dbNorm ? pkgNorm === dbNorm : null;
+    let note = "";
+    if (match === false) note = "內容不一致";
+    if (!pkgNorm && dbNorm) note = "包裝草稿未填";
+    if (pkgNorm && !dbNorm) note = "總表無資料";
+    return { field: f.label, onPkg, inDb, match, note };
+  });
 
-  const inDb = group.pn ? productIndex[group.pn] : null;
-  const dbNote = inDb ? `產品總表有此品號（分頁：${inDb.sheetName}）` : group.pn ? "產品總表查無此品號" : "未提供品號，無法做總表比對";
-  const score = Math.max(0, 100 - missing.length * 20 - (inDb ? 0 : 10));
+  const matched = rows.filter((r) => r.match === true).length;
+  const mismatched = rows.filter((r) => r.match === false).length;
+  const missingOnPkg = rows.filter((r) => !normalizeText(r.onPkg) && normalizeText(r.inDb)).map((r) => r.field);
+  const missingInDb = rows.filter((r) => normalizeText(r.onPkg) && !normalizeText(r.inDb)).map((r) => r.field);
+  const mismatchFields = rows.filter((r) => r.match === false).map((r) => r.field);
+  return { rows, matched, mismatched, missingOnPkg, missingInDb, mismatchFields };
+}
 
-  return {
-    score,
-    dbNote,
-    missing,
-    advice: missing.length ? "請先補齊缺漏欄位後再送法規審核。" : "可進一步串接 OCR/LLM 進行逐字法規審核。",
+function detectPnCandidates({ formData, allImages, productIndex, productName }) {
+  const candidates = new Set();
+  const addIfPnLike = (text) => {
+    if (!text) return;
+    const val = String(text).trim().toUpperCase();
+    if (/^[A-Z0-9-]{6,}$/.test(val)) candidates.add(val);
   };
+
+  addIfPnLike(formData["品號"] || formData["產品編號"] || formData["productCode"]);
+
+  const allFormText = JSON.stringify(formData || {});
+  for (const m of allFormText.matchAll(/[A-Za-z0-9-]{6,}/g)) addIfPnLike(m[0]);
+  for (const img of allImages || []) {
+    for (const m of String(img.name || "").matchAll(/[A-Za-z0-9-]{6,}/g)) addIfPnLike(m[0]);
+  }
+
+  const normName = normalizeText(productName);
+  if (normName) {
+    for (const [pn, entry] of Object.entries(productIndex || {})) {
+      if (normalizeText(entry?.data?.品名) === normName) candidates.add(String(pn).toUpperCase());
+    }
+  }
+
+  return [...candidates];
 }
 
 function App() {
@@ -191,7 +234,7 @@ function App() {
   const [allImages, setAllImages] = useState([]);
   const [formData, setFormData] = useState({});
   const [err, setErr] = useState("");
-  const [stage, setStage] = useState("upload"); // upload | grouping | done
+  const [stage, setStage] = useState("upload"); // upload | grouping | confirm | done
   const [groups, setGroups] = useState([]);
   const [reports, setReports] = useState([]);
 
@@ -281,20 +324,74 @@ function App() {
       setErr("請先上傳至少一張圖片後再進下一步。");
       return;
     }
+    const initialDraft = {
+      品號: formData["品號"] || "",
+      品名: formData["品名"] || formData["產品名稱"] || "",
+      條碼: formData["條碼"] || "",
+      成份: "",
+      分析值: "",
+      淨重: formData["淨重"] || formData["規格"] || "",
+    };
+
+    const detectedPn = detectPnCandidates({ formData, allImages, productIndex, productName: initialDraft.品名 })[0] || "";
+    if (!initialDraft.品號 && detectedPn) initialDraft.品號 = detectedPn;
+
     setErr("");
-    setGroups([{ id: 0, label: "商品一", pn: formData["品號"] || "", imageIndices: allImages.map((_, i) => i) }]);
+    setGroups([
+      {
+        id: 0,
+        label: initialDraft.品名 || "商品一",
+        pn: initialDraft.品號,
+        imageIndices: allImages.map((_, i) => i),
+        pkgDraft: initialDraft,
+      },
+    ]);
     setStage("grouping");
   };
 
   const updateGroup = (gid, patch) => setGroups((prev) => prev.map((g, i) => (i === gid ? { ...g, ...patch } : g)));
 
+  const updateGroupDraft = (gid, key, value) => {
+    setGroups((prev) => prev.map((g, i) => (i === gid ? { ...g, pkgDraft: { ...g.pkgDraft, [key]: value } } : g)));
+  };
+
+  const autofillFromDb = (gid) => {
+    setGroups((prev) =>
+      prev.map((g, i) => {
+        if (i !== gid) return g;
+        const found = g.pn ? productIndex[g.pn] : null;
+        if (!found) return g;
+        const nextDraft = { ...g.pkgDraft };
+        COMPARE_FIELDS.forEach((f) => {
+          if (!nextDraft[f.key] && found.data[f.key]) nextDraft[f.key] = found.data[f.key];
+        });
+        return { ...g, pkgDraft: nextDraft };
+      }),
+    );
+  };
+
   const splitToNewGroup = (imgIdx, gid) => {
     setGroups((prev) => {
       const next = prev.map((g, i) => (i === gid ? { ...g, imageIndices: g.imageIndices.filter((x) => x !== imgIdx) } : g));
       const cleaned = next.filter((g) => g.imageIndices.length > 0);
-      cleaned.push({ id: Date.now(), label: `商品${cleaned.length + 1}`, pn: "", imageIndices: [imgIdx] });
+      cleaned.push({
+        id: Date.now(),
+        label: `商品${cleaned.length + 1}`,
+        pn: "",
+        imageIndices: [imgIdx],
+        pkgDraft: { 品號: "", 品名: "", 條碼: "", 成份: "", 分析值: "", 淨重: "" },
+      });
       return cleaned;
     });
+  };
+
+  const goConfirm = () => {
+    if (!groups.length) {
+      setErr("請先建立至少一個商品分組。");
+      return;
+    }
+    setErr("");
+    setStage("confirm");
   };
 
   const runReview = () => {
@@ -302,22 +399,49 @@ function App() {
       setErr("請先建立至少一個商品分組。");
       return;
     }
+
     const output = groups.map((g) => {
-      const result = quickLegalReview(g, g.imageIndices.length, productIndex, formData);
-      return { group: g, ...result };
+      let pn = g.pn || g.pkgDraft?.品號 || "";
+      if (!pn) {
+        pn =
+          detectPnCandidates({
+            formData,
+            allImages: g.imageIndices.map((idx) => allImages[idx]).filter(Boolean),
+            productIndex,
+            productName: g.pkgDraft?.品名 || g.label,
+          })[0] || "";
+      }
+      const found = pn ? productIndex[pn] : null;
+      const mergedDraft = { ...g.pkgDraft, 品號: pn };
+      const comparison = compareWithDb(mergedDraft, found);
+
+      const missing = [];
+      if (!mergedDraft.品名) missing.push("包裝草稿未提供品名");
+      if (!mergedDraft.品號) missing.push("包裝草稿未提供品號（已嘗試自動抓取）");
+      if (!g.imageIndices.length) missing.push("此商品沒有圖片");
+
+      const score = Math.max(0, 100 - missing.length * 15 - comparison.mismatched * 8 - (found ? 0 : 10));
+
+      return {
+        group: g,
+        pn,
+        found,
+        comparison,
+        missing,
+        score,
+      };
     });
+
     setReports(output);
     setStage("done");
   };
-
-  const backToGrouping = () => setStage("grouping");
 
   if (!dbInit) return null;
 
   return (
     <main className="container">
       <h1>寵物食品包裝法規校稿系統</h1>
-      <p className="muted">流程已補齊：上傳 → 分組 → 產生檢核結果。</p>
+      <p className="muted">流程：上傳 → 分組 → 確認可編輯文字草稿 → 檢核結果</p>
 
       <section className="card">
         <h2>產品總表 Excel</h2>
@@ -352,18 +476,25 @@ function App() {
         )}
       </section>
 
-      {(stage === "grouping" || stage === "done") && (
+      {(stage === "grouping" || stage === "confirm" || stage === "done") && (
         <section className="card">
           <h2>商品分組</h2>
-          <p className="muted">調整完群組後，請按「執行法規檢核」。</p>
           {groups.map((g, gi) => (
             <div key={g.id} className="groupCard">
               <div className="groupHead">
                 <input value={g.label} onChange={(e) => updateGroup(gi, { label: e.target.value })} />
                 <label>
                   品號：
-                  <input value={g.pn} onChange={(e) => updateGroup(gi, { pn: e.target.value })} />
+                  <input
+                    value={g.pn}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      updateGroup(gi, { pn: v });
+                      updateGroupDraft(gi, "品號", v);
+                    }}
+                  />
                 </label>
+                <button className="ghost" onClick={() => autofillFromDb(gi)}>從總表補入空白欄位</button>
               </div>
               <div className="grid">
                 {g.imageIndices.map((idx) => {
@@ -383,9 +514,38 @@ function App() {
             </div>
           ))}
           <div className="actions">
-            {stage === "done" && <button className="ghost" onClick={backToGrouping}>返回分組調整</button>}
-            <button className="primary" onClick={runReview}>執行法規檢核</button>
+            {stage === "grouping" && <button className="primary" onClick={goConfirm}>下一步：確認擷取文字</button>}
+            {stage === "confirm" && <button className="primary" onClick={runReview}>執行法規檢核</button>}
+            {stage === "done" && <button className="ghost" onClick={() => setStage("confirm")}>返回文字確認</button>}
           </div>
+        </section>
+      )}
+
+      {(stage === "confirm" || stage === "done") && (
+        <section className="card">
+          <h2>包裝擷取文字（可編輯確認）</h2>
+          <p className="muted">檢核前可先人工修正欄位，會用這份資料比對總表。</p>
+          {groups.map((g, gi) => (
+            <div key={`draft-${g.id}`} className="resultCard">
+              <h3>{g.label}</h3>
+              <div className="formGrid">
+                {COMPARE_FIELDS.map((f) => (
+                  <label key={`${g.id}-${f.key}`}>
+                    {f.label}
+                    <textarea
+                      rows={f.key === "成份" || f.key === "分析值" ? 3 : 1}
+                      value={g.pkgDraft?.[f.key] || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (f.key === "品號") updateGroup(gi, { pn: val });
+                        updateGroupDraft(gi, f.key, val);
+                      }}
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
         </section>
       )}
 
@@ -394,17 +554,50 @@ function App() {
           <h2>檢核結果</h2>
           {reports.map((r, i) => (
             <div key={i} className="resultCard">
-              <h3>{r.group.label}（{r.group.pn || "未填品號"}）</h3>
+              <h3>{r.group.label}（{r.pn || "未填品號"}）</h3>
               <p>合規評分：<strong>{r.score}</strong> / 100</p>
-              <p>總表比對：{r.dbNote}</p>
-              {r.missing.length > 0 ? (
+              <p>總表比對：{r.found ? `產品總表有此品號（分頁：${r.found.sheetName}）` : "產品總表查無此品號"}</p>
+
+              {r.missing.length > 0 && (
                 <ul>
                   {r.missing.map((m, mi) => <li key={mi}>{m}</li>)}
                 </ul>
-              ) : (
-                <p className="ok">✅ 目前沒有偵測到基礎缺漏。</p>
               )}
-              <p className="muted">建議：{r.advice}</p>
+
+              {r.found && (
+                <>
+                <div className="diffSummary">
+                  <span>✅ 一致：{r.comparison.matched}</span>
+                  <span>❌ 不一致：{r.comparison.mismatched}</span>
+                  <span>🟡 包裝缺漏：{r.comparison.missingOnPkg.length}</span>
+                  <span>🟣 總表缺漏：{r.comparison.missingInDb.length}</span>
+                </div>
+                <table className="cmpTable">
+                  <thead>
+                    <tr>
+                      <th>欄位</th>
+                      <th>包裝草稿</th>
+                      <th>總表資料</th>
+                      <th>結果</th>
+                      <th>差異說明</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {r.comparison.rows.map((row, ri) => (
+                      <tr key={ri}>
+                        <td>{row.field}</td>
+                        <td>{row.onPkg || "（空白）"}</td>
+                        <td>{row.inDb || "（空白）"}</td>
+                        <td>
+                          {row.match === true ? "✅ 一致" : row.match === false ? "❌ 不一致" : "— 未判定"}
+                        </td>
+                        <td>{row.note || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                </>
+              )}
             </div>
           ))}
         </section>
