@@ -183,77 +183,113 @@ function preprocessImageForOcr(dataUrl) {
   });
 }
 
+function pickFirstMatch(lines, patterns) {
+  for (const re of patterns) {
+    for (const line of lines) {
+      const m = line.match(re);
+      if (m?.[1]) return m[1].trim();
+    }
+  }
+  return "";
+}
+
+function isValidForField(field, value) {
+  const v = String(value || "").trim();
+  if (!v) return false;
+  if (field === "品號") return /^[A-Z0-9-]{3,16}$/i.test(v) && /[A-Z]/i.test(v) && /\d/.test(v);
+  if (field === "條碼") return /^\d{8,14}$/.test(v);
+  if (field === "品名") return v.length >= 2 && v.length <= 40 && !/[{}<>]/.test(v);
+  if (field === "淨重") return /(kg|g|mg|ml|l|公斤|公克|毫升)/i.test(v) && /\d/.test(v);
+  if (field === "分析值") return /(蛋白|脂肪|纖維|灰分|水分|鈣|磷|熱量|kcal|%|mg|g)/i.test(v);
+  if (field === "成份") return /(雞|魚|肉|穀|玉米|脂|纖維|維生素|礦物質|添加物|原料|成分|成份)/i.test(v);
+  return true;
+}
+
 function parseDraftFromOcr(rawText, fallbackName = "") {
   const text = String(rawText || "").split("\r").join("\n");
   const rawLines = text.split("\n").map((x) => x.trim()).filter(Boolean);
   const lines = rawLines.map((line) => line.replace(/[｜|]/g, " ").replace(/\s+/g, " ").trim());
 
-  const pnCandidate = (text.match(/\b([A-Z]{1,5}\d{2,}[A-Z0-9-]{0,8})\b/i) || [])[1] || "";
-  const pn = /[A-Z]/i.test(pnCandidate) && /\d/.test(pnCandidate) ? normalizePn(pnCandidate) : "";
-  const barcode = (text.match(/\b(\d{8,14})\b/) || [])[1] || "";
-
-  const findLine = (re) => lines.find((line) => re.test(line)) || "";
-
-  let weight = "";
-  const weightLine = findLine(/(?:淨重|內容量|規格)\s*[:：]?\s*\d+(?:\.\d+)?\s?(?:kg|g|mg|ml|l|公斤|公克|毫升)/i);
-  if (weightLine) {
-    const m = weightLine.match(/(?:淨重|內容量|規格)\s*[:：]?\s*(.*)$/i);
-    weight = (m?.[1] || weightLine).trim();
-  }
-  if (!weight) {
-    weight = findLine(/\b\d+(?:\.\d+)?\s?(?:kg|g|mg|ml|l|公斤|公克|毫升)\b/i);
-  }
-
-  let productName = "";
-  for (const line of lines.slice(0, 14)) {
-    if (line.length < 2 || line.length > 32) continue;
-    if (/[:：]/.test(line)) continue;
-    if (/\d{5,}/.test(line)) continue;
-    if (/(成分|成份|營養|分析|保存|注意事項|製造|產地|條碼|重量|淨重|內容量|規格)/.test(line)) continue;
-    productName = line;
-    break;
-  }
-
-  const collectByHeader = (headerRegex, stopRegex) => {
+  const getSection = (headerRegex, stopRegex, maxLines = 14) => {
     const idx = lines.findIndex((line) => headerRegex.test(line));
     if (idx === -1) return "";
-    const picked = [];
+    const out = [];
     const inline = lines[idx].replace(headerRegex, "").replace(/^[：:\s]+/, "").trim();
-    if (inline) picked.push(inline);
-    for (let i = idx + 1; i < Math.min(lines.length, idx + 14); i++) {
+    if (inline) out.push(inline);
+    for (let i = idx + 1; i < Math.min(lines.length, idx + maxLines); i++) {
       const l = lines[i];
       if (!l) continue;
       if (stopRegex.test(l)) break;
-      picked.push(l);
+      out.push(l);
     }
-    return picked.join(" ").replace(/\s{2,}/g, " ").trim();
+    return out.join(" ").replace(/\s{2,}/g, " ").trim();
   };
 
-  let ingredient = collectByHeader(
+  const pnLabeled = pickFirstMatch(lines, [
+    /(?:品號|產品編號|貨號)\s*[:：]\s*([A-Z0-9-]{3,16})/i,
+    /(?:品號|產品編號|貨號)\s+([A-Z0-9-]{3,16})/i,
+  ]);
+  const pnGeneric = (text.match(/\b([A-Z]{1,5}\d{2,}[A-Z0-9-]{0,8})\b/i) || [])[1] || "";
+  const pn = normalizePn(pnLabeled || pnGeneric);
+
+  const barcodeLabeled = pickFirstMatch(lines, [
+    /(?:條碼|國際條碼|barcode)\s*[:：]?\s*(\d{8,14})/i,
+  ]);
+  const barcodeGeneric = (text.match(/\b(\d{8,14})\b/) || [])[1] || "";
+  const barcode = (barcodeLabeled || barcodeGeneric || "").trim();
+
+  const nameLabeled = pickFirstMatch(lines, [
+    /(?:品名|產品名稱)\s*[:：]\s*(.{2,40})/i,
+  ]);
+  let productName = nameLabeled;
+  if (!productName) {
+    for (const line of lines.slice(0, 14)) {
+      if (line.length < 2 || line.length > 32) continue;
+      if (/[:：]/.test(line)) continue;
+      if (/\d{5,}/.test(line)) continue;
+      if (/(成分|成份|營養|分析|保存|注意事項|製造|產地|條碼|重量|淨重|內容量|規格)/.test(line)) continue;
+      productName = line;
+      break;
+    }
+  }
+
+  let weight = pickFirstMatch(lines, [
+    /(?:淨重|內容量|規格)\s*[:：]?\s*([^\n]{1,30})/i,
+  ]);
+  if (!weight) {
+    weight = lines.find((line) => /\b\d+(?:\.\d+)?\s?(?:kg|g|mg|ml|l|公斤|公克|毫升)\b/i.test(line)) || "";
+  }
+
+  let ingredient = getSection(
     /(?:成分|成份|原料|主要原料|配方)\s*[：:]?/i,
     /(?:營養|分析|保證分析|淨重|內容量|保存|注意事項|製造|產地|使用方式|餵食)/i,
   );
   if (!ingredient) {
-    ingredient = lines.filter((l) => /(雞|魚|肉|穀|玉米|脂|纖維|維生素|礦物質|添加物|原料)/.test(l)).slice(0, 4).join(" ");
+    const cand = lines.filter((l) => /(雞|魚|肉|穀|玉米|脂|纖維|維生素|礦物質|添加物|原料)/.test(l));
+    ingredient = cand.slice(0, 4).join(" ");
   }
 
-  let analysis = collectByHeader(
+  let analysis = getSection(
     /(?:營養成分|分析值|保證分析|主要營養成分|營養分析)\s*[：:]?/i,
     /(?:成分|成份|原料|淨重|內容量|保存|注意事項|製造|產地|餵食|使用方式)/i,
   );
   if (!analysis) {
-    analysis = lines.filter((l) => /(蛋白|脂肪|纖維|灰分|水分|鈣|磷|熱量|kcal|%|mg|g)/i.test(l)).slice(0, 6).join(" ");
+    const cand = lines.filter((l) => /(蛋白|脂肪|纖維|灰分|水分|鈣|磷|熱量|kcal|%|mg|g)/i.test(l));
+    analysis = cand.slice(0, 6).join(" ");
   }
 
-  return {
-    品號: pn,
-    條碼: barcode,
-    品名: productName || fallbackName,
-    成份: ingredient,
-    分析值: analysis,
-    淨重: (weight || "").trim(),
+  const draft = {
+    品號: isValidForField("品號", pn) ? pn : "",
+    條碼: isValidForField("條碼", barcode) ? barcode : "",
+    品名: isValidForField("品名", productName || fallbackName) ? (productName || fallbackName) : "",
+    成份: isValidForField("成份", ingredient) ? ingredient : "",
+    分析值: isValidForField("分析值", analysis) ? analysis : "",
+    淨重: isValidForField("淨重", weight) ? weight.trim() : "",
   };
+
+  return draft;
 }
+
 
 async function parsePptx(file) {
   const JSZip = await loadJSZip();
@@ -564,7 +600,10 @@ function App() {
         const guessed = parseDraftFromOcr(mergedText, g.label || "");
         const nextDraft = { ...g.pkgDraft };
         COMPARE_FIELDS.forEach((f) => {
-          if (!String(nextDraft[f.key] || "").trim() && String(guessed[f.key] || "").trim()) nextDraft[f.key] = guessed[f.key];
+          const cand = String(guessed[f.key] || "").trim();
+          if (!cand) return;
+          if (!isValidForField(f.key, cand)) return;
+          if (!String(nextDraft[f.key] || "").trim()) nextDraft[f.key] = cand;
         });
         next[gi] = { ...g, pn: normalizePn(g.pn || guessed.品號), pkgDraft: nextDraft, ocrText: mergedText };
       }
