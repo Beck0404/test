@@ -155,19 +155,15 @@ async function loadTesseract() {
 }
 
 function parseDraftFromOcr(rawText, fallbackName = "") {
-  const text = String(rawText || "").split("
-").join("
-");
-  const lines = text.split("
-").map((x) => x.trim()).filter(Boolean);
+  const text = String(rawText || "").split("\r").join("\n");
+  const lines = text.split("\n").map((x) => x.trim()).filter(Boolean);
 
-  const pn = (text.match(/([A-Z]{1,5}\d{2,}[A-Z0-9-]{0,8})/i) || [])[1] || "";
-  const barcode = (text.match(/(\d{8,14})/) || [])[1] || "";
+  const pn = (text.match(/\b([A-Z]{1,5}\d{2,}[A-Z0-9-]{0,8})\b/i) || [])[1] || "";
+  const barcode = (text.match(/\b(\d{8,14})\b/) || [])[1] || "";
 
-  let weight = (text.match(/(?:淨重|內容量|規格)\s*[:：]?\s*([^
-]{1,30})/) || [])[1] || "";
+  let weight = (text.match(/(?:淨重|內容量|規格)\s*[:：]?\s*([^\n]{1,30})/) || [])[1] || "";
   if (!weight) {
-    const unitLine = lines.find((line) => /\d+(?:\.\d+)?\s?(?:kg|g|mg|ml|l|公斤|公克|毫升)/i.test(line));
+    const unitLine = lines.find((line) => /\b\d+(?:\.\d+)?\s?(?:kg|g|mg|ml|l|公斤|公克|毫升)\b/i.test(line));
     weight = unitLine || "";
   }
 
@@ -208,7 +204,6 @@ function parseDraftFromOcr(rawText, fallbackName = "") {
     淨重: weight.trim(),
   };
 }
-
 
 async function parsePptx(file) {
   const JSZip = await loadJSZip();
