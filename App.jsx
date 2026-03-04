@@ -675,8 +675,7 @@ function App() {
           });
           const t1 = String(pass1?.data?.text || "").trim();
           const t2 = String(pass2?.data?.text || "").trim();
-          const textOut = [t1, t2].filter(Boolean).join("
-").trim();
+          const textOut = [t1, t2].filter(Boolean).join("\n").trim();
           if (textOut) texts.push(textOut);
         }
 
