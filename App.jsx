@@ -136,6 +136,80 @@ function parseRels(relsXml) {
   return results;
 }
 
+
+let _Tesseract = null;
+async function loadTesseract() {
+  if (_Tesseract) return _Tesseract;
+  if (window.Tesseract) return (_Tesseract = window.Tesseract);
+  await new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+    script.async = true;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("Tesseract 載入失敗，請確認網路連線"));
+    document.head.appendChild(script);
+  });
+  if (!window.Tesseract) throw new Error("Tesseract 初始化失敗");
+  _Tesseract = window.Tesseract;
+  return _Tesseract;
+}
+
+function parseDraftFromOcr(rawText, fallbackName = "") {
+  const text = String(rawText || "").split("
+").join("
+");
+  const lines = text.split("
+").map((x) => x.trim()).filter(Boolean);
+
+  const pn = (text.match(/([A-Z]{1,5}\d{2,}[A-Z0-9-]{0,8})/i) || [])[1] || "";
+  const barcode = (text.match(/(\d{8,14})/) || [])[1] || "";
+
+  let weight = (text.match(/(?:淨重|內容量|規格)\s*[:：]?\s*([^
+]{1,30})/) || [])[1] || "";
+  if (!weight) {
+    const unitLine = lines.find((line) => /\d+(?:\.\d+)?\s?(?:kg|g|mg|ml|l|公斤|公克|毫升)/i.test(line));
+    weight = unitLine || "";
+  }
+
+  let productName = "";
+  for (const line of lines.slice(0, 12)) {
+    if (line.length < 2 || line.length > 30) continue;
+    if (/[:：]/.test(line)) continue;
+    if (/\d{5,}/.test(line)) continue;
+    if (/(成分|成份|營養|分析|保存|注意事項|製造|產地|條碼|重量|淨重)/.test(line)) continue;
+    productName = line;
+    break;
+  }
+
+  const collectByHeader = (headerRegex, stopRegex) => {
+    const idx = lines.findIndex((line) => headerRegex.test(line));
+    if (idx === -1) return "";
+    const picked = [];
+    const inline = lines[idx].replace(headerRegex, "").replace(/^[：:\s]+/, "").trim();
+    if (inline) picked.push(inline);
+    for (let i = idx + 1; i < Math.min(lines.length, idx + 8); i++) {
+      const l = lines[i];
+      if (!l) continue;
+      if (stopRegex.test(l)) break;
+      picked.push(l);
+    }
+    return picked.join(" ").replace(/\s{2,}/g, " ").trim();
+  };
+
+  const ingredient = collectByHeader(/^(?:成分|成份|原料|主要原料)\s*[：:]?/i, /^(?:營養|分析|保證分析|淨重|內容量|保存|注意事項|製造|產地)/i);
+  const analysis = collectByHeader(/^(?:營養成分|分析值|保證分析|主要營養成分)\s*[：:]?/i, /^(?:成分|成份|原料|淨重|內容量|保存|注意事項|製造|產地)/i);
+
+  return {
+    品號: normalizePn(pn),
+    條碼: barcode,
+    品名: productName || fallbackName,
+    成份: ingredient,
+    分析值: analysis,
+    淨重: weight.trim(),
+  };
+}
+
+
 async function parsePptx(file) {
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
@@ -262,6 +336,8 @@ function App() {
   const [stage, setStage] = useState("upload"); // upload | grouping | confirm | done
   const [groups, setGroups] = useState([]);
   const [reports, setReports] = useState([]);
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [ocrMsg, setOcrMsg] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -311,6 +387,8 @@ function App() {
       setGroups([]);
       setReports([]);
       setStage("upload");
+      setOcrBusy(false);
+      setOcrMsg("");
 
       if (pptx) {
         const parsed = await parsePptx(pptx);
@@ -409,12 +487,56 @@ function App() {
     });
   };
 
-  const goConfirm = () => {
+  const runAutoOcrForGroups = async () => {
+    if (!groups.length) return;
+    setOcrBusy(true);
+    setOcrMsg("初始化 OCR 引擎中...");
+    try {
+      const Tesseract = await loadTesseract();
+      const next = [...groups];
+      for (let gi = 0; gi < next.length; gi++) {
+        const g = next[gi];
+        if (!g?.imageIndices?.length) continue;
+        const needOcr = COMPARE_FIELDS.some((f) => !String(g.pkgDraft?.[f.key] || "").trim());
+        if (!needOcr && g.ocrText) continue;
+
+        const texts = [];
+        for (let ii = 0; ii < g.imageIndices.length; ii++) {
+          const imgIdx = g.imageIndices[ii];
+          const img = allImages[imgIdx];
+          if (!img?.dataUrl) continue;
+          setOcrMsg(`OCR 辨識中：${g.label || `商品${gi + 1}`}（第 ${ii + 1}/${g.imageIndices.length} 張）`);
+          const result = await Tesseract.recognize(img.dataUrl, "chi_tra+eng");
+          texts.push(result?.data?.text || "");
+        }
+
+        const mergedText = texts.join("\n").trim();
+        const guessed = parseDraftFromOcr(mergedText, g.label || "");
+        const nextDraft = { ...g.pkgDraft };
+        COMPARE_FIELDS.forEach((f) => {
+          if (!String(nextDraft[f.key] || "").trim() && String(guessed[f.key] || "").trim()) nextDraft[f.key] = guessed[f.key];
+        });
+        next[gi] = { ...g, pn: normalizePn(g.pn || guessed.品號), pkgDraft: nextDraft, ocrText: mergedText };
+      }
+      setGroups(next);
+      setOcrMsg("OCR 完成，請確認草稿內容。");
+      return next;
+    } catch (e) {
+      setErr(`OCR 失敗：${e.message}`);
+      setOcrMsg("");
+      return groups;
+    } finally {
+      setOcrBusy(false);
+    }
+  };
+
+  const goConfirm = async () => {
     if (!groups.length) {
       setErr("請先建立至少一個商品分組。");
       return;
     }
-    const needFix = groups
+    const latestGroups = await runAutoOcrForGroups();
+    const needFix = latestGroups
       .map((g) => ({ label: g.label || "未命名商品", check: buildGroupChecklist(g) }))
       .filter((x) => !x.check.ready);
     if (needFix.length) {
@@ -489,7 +611,7 @@ function App() {
         <ol className="flowList">
           <li>先上傳圖片/PPT，刪掉不相關圖片。</li>
           <li>在「商品分組」填好每個商品的品名與品號。</li>
-          <li>在「包裝擷取文字」僅以你上傳的包裝圖片/PPT內容人工填寫，不使用總表反向補值。</li>
+          <li>進入確認頁前會先自動 OCR 讀圖，再由你人工覆核修正。</li>
           <li>送檢前確認必要欄位（品號、品名）已完成，再看差異報告。</li>
         </ol>
       </section>
@@ -573,9 +695,10 @@ function App() {
             </div>
           ))}
           <div className="actions">
-            {stage === "grouping" && <button className="primary" onClick={goConfirm}>下一步：確認擷取文字</button>}
-            {stage === "confirm" && <button className="primary" onClick={runReview}>執行法規檢核</button>}
+            {stage === "grouping" && <button className="primary" onClick={goConfirm} disabled={ocrBusy}>{ocrBusy ? "OCR 辨識中..." : "下一步：自動OCR並確認文字"}</button>}
+            {stage === "confirm" && <button className="primary" onClick={runReview} disabled={ocrBusy}>執行法規檢核</button>}
             {stage === "done" && <button className="ghost" onClick={() => setStage("confirm")}>返回文字確認</button>}
+            {(ocrBusy || ocrMsg) && <p className="muted">{ocrMsg || "OCR 處理中..."}</p>}
           </div>
         </section>
       )}
@@ -583,7 +706,7 @@ function App() {
       {(stage === "confirm" || stage === "done") && (
         <section className="card">
           <h2>包裝擷取文字（人工確認草稿）</h2>
-          <p className="muted">目前系統不會自動 OCR 讀圖；請僅依你上傳的包裝圖片/PPT人工填寫與確認。</p>
+          <p className="muted">系統會先自動 OCR 讀取你上傳的包裝圖片/PPT（含成份、分析值、淨重嘗試擷取），再請你人工覆核與修正。</p>
           {groups.map((g, gi) => (
             <div key={`draft-${g.id}`} className="resultCard">
               <h3>{g.label}</h3>
@@ -595,6 +718,12 @@ function App() {
                   </p>
                 );
               })()}
+              {g.ocrText && (
+                <details>
+                  <summary className="muted">查看 OCR 原始文字</summary>
+                  <pre>{g.ocrText}</pre>
+                </details>
+              )}
               <div className="formGrid">
                 {COMPARE_FIELDS.map((f) => (
                   <label key={`${g.id}-${f.key}`}>
