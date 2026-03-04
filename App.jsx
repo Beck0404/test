@@ -221,6 +221,81 @@ function normalizeBarcodeCandidate(value) {
     .replace(/[^0-9]/g, "");
 }
 
+function checksumMod10(numText) {
+  const digits = String(numText || "").replace(/\D/g, "").split("").map(Number);
+  if (!digits.length) return false;
+  const check = digits.pop();
+  const sum = digits
+    .reverse()
+    .reduce((acc, n, i) => acc + n * (i % 2 === 0 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === check;
+}
+
+function isValidBarcodeDigits(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!/^\d{8}$|^\d{12}$|^\d{13}$|^\d{14}$/.test(digits)) return false;
+  return checksumMod10(digits);
+}
+
+function pickBestBarcode(text) {
+  const raw = String(text || "");
+  const tokens = raw.match(/[A-Za-z0-9-]{8,24}/g) || [];
+  const scored = [];
+  for (const token of tokens) {
+    const normalized = normalizeBarcodeCandidate(token);
+    if (!/^\d{8}$|^\d{12}$|^\d{13}$|^\d{14}$/.test(normalized)) continue;
+    let score = normalized.length === 13 ? 6 : normalized.length === 12 ? 5 : 4;
+    if (isValidBarcodeDigits(normalized)) score += 8;
+
+    const idx = raw.indexOf(token);
+    const context = raw.slice(Math.max(0, idx - 30), Math.min(raw.length, idx + token.length + 30));
+    if (/(?:條碼|國際條碼|ean|upc|barcode)/i.test(context)) score += 5;
+    if (/(?:有效|保存|日期|製造|批號)/.test(context)) score -= 5;
+    scored.push({ normalized, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.normalized || "";
+}
+
+function parseFormDataFromParas(paras = []) {
+  const lines = paras.map((x) => String(x || "").trim()).filter(Boolean);
+  const aliases = {
+    品號: ["品號", "產品編號", "貨號", "productcode", "sku"],
+    品名: ["品名", "產品名稱", "productname", "商品名稱"],
+    條碼: ["條碼", "國際條碼", "barcode", "ean", "upc"],
+    淨重: ["淨重", "內容量", "規格", "重量"],
+  };
+  const out = {};
+
+  const mapLabel = (labelText) => {
+    const norm = String(labelText || "").toLowerCase().replace(/\s+/g, "");
+    return Object.entries(aliases).find(([, list]) => list.some((k) => norm.includes(k.toLowerCase())))?.[0] || "";
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const inline = line.match(/^(.{1,20}?)[：:]+\s*(.+)$/);
+    if (inline) {
+      const key = mapLabel(inline[1]);
+      if (key && !out[key]) out[key] = inline[2].trim();
+      continue;
+    }
+
+    const tailLabel = line.match(/^(.{1,20}?)[：:]?$/);
+    if (tailLabel && i + 1 < lines.length) {
+      const key = mapLabel(tailLabel[1]);
+      const next = lines[i + 1];
+      if (key && next && !/^(.{1,20}?)[：:]+\s*(.+)$/.test(next) && !out[key]) {
+        out[key] = next.trim();
+      }
+    }
+  }
+
+  if (out.品號) out.品號 = normalizePn(out.品號);
+  if (out.條碼) out.條碼 = normalizeBarcodeCandidate(out.條碼);
+  return out;
+}
+
 function getPnVariants(pn) {
   const base = normalizePn(pn);
   if (!base) return [];
@@ -280,9 +355,7 @@ function parseDraftFromOcr(rawText, fallbackName = "", formData = {}) {
     /(?:條碼|國際條碼|barcode)\s*[:：]?\s*([A-Za-z0-9\s-]{8,24})/i,
   ]);
   const barcodeLabeled = normalizeBarcodeCandidate(barcodeLine);
-  const barcodeGenericRaw = (text.match(/\b([A-Za-z0-9-]{8,20})\b/g) || [])
-    .map((x) => normalizeBarcodeCandidate(x))
-    .find((x) => x.length >= 8 && x.length <= 14) || "";
+  const barcodeGenericRaw = pickBestBarcode(text);
   const barcode = (barcodeLabeled || barcodeGenericRaw || "").trim();
 
 
@@ -328,7 +401,7 @@ function parseDraftFromOcr(rawText, fallbackName = "", formData = {}) {
 
   const draft = {
     品號: isValidForField("品號", pn) ? pn : "",
-    條碼: isValidForField("條碼", barcode) ? barcode : "",
+    條碼: isValidForField("條碼", barcode) || isValidBarcodeDigits(barcode) ? barcode : "",
     品名: isValidForField("品名", productName || fallbackName) ? (productName || fallbackName) : "",
     成份: isValidForField("成份", ingredient) ? ingredient : "",
     分析值: isValidForField("分析值", analysis) ? analysis : "",
@@ -368,6 +441,13 @@ async function parsePptx(file) {
   }
 
   const formData = {};
+  const allParas = [];
+  for (const sk of slideKeys) {
+    const xml = await zip.files[sk].async("text");
+    allParas.push(...xmlParas(xml));
+  }
+  Object.assign(formData, parseFormDataFromParas(allParas));
+
   if (slideKeys[0]) {
     const s1xml = await zip.files[slideKeys[0]].async("text");
     const paras = xmlParas(s1xml);
@@ -378,9 +458,37 @@ async function parsePptx(file) {
         if (val && val.length < 100 && !val.endsWith(":") && !val.endsWith("：")) formData[p.slice(0, -1).trim()] = val;
       }
     }
+    Object.assign(formData, parseFormDataFromParas(paras), formData);
   }
 
   return { allImages, formData };
+}
+
+async function runOcrMultiPass(Tesseract, dataUrl) {
+  const inputs = [
+    dataUrl,
+    await preprocessImageForOcr(dataUrl),
+  ];
+  const configs = ["6", "11", "4"];
+  const texts = [];
+  for (const src of inputs) {
+    for (const psm of configs) {
+      const result = await Tesseract.recognize(src, "chi_tra+eng", {
+        tessedit_pageseg_mode: psm,
+        preserve_interword_spaces: "1",
+      });
+      const txt = String(result?.data?.text || "").trim();
+      if (txt) texts.push(txt);
+    }
+  }
+
+  const barcodeFocus = await Tesseract.recognize(dataUrl, "eng", {
+    tessedit_pageseg_mode: "7",
+    tessedit_char_whitelist: "0123456789OolISBZ- ",
+  });
+  const barcodeText = String(barcodeFocus?.data?.text || "").trim();
+  if (barcodeText) texts.push(`條碼:${barcodeText}`);
+  return texts;
 }
 
 function compareWithDb(pkgDraft, dbRow) {
@@ -585,12 +693,12 @@ function App() {
       return;
     }
     const initialDraft = {
-      品號: formData["品號"] || "",
-      品名: formData["品名"] || formData["產品名稱"] || "",
-      條碼: formData["條碼"] || "",
+      品號: formData["品號"] || formData["產品編號"] || formData["productCode"] || "",
+      品名: formData["品名"] || formData["產品名稱"] || formData["productName"] || "",
+      條碼: formData["條碼"] || formData["國際條碼"] || formData["barcode"] || "",
       成份: "",
       分析值: "",
-      淨重: formData["淨重"] || formData["規格"] || "",
+      淨重: formData["淨重"] || formData["內容量"] || formData["規格"] || "",
       包裝全文: "",
     };
 
@@ -664,18 +772,8 @@ function App() {
           const img = allImages[imgIdx];
           if (!img?.dataUrl) continue;
           setOcrMsg(`OCR 辨識中：${g.label || `商品${gi + 1}`}（第 ${ii + 1}/${g.imageIndices.length} 張）`);
-          const prepared = await preprocessImageForOcr(img.dataUrl);
-          const pass1 = await Tesseract.recognize(prepared, "chi_tra+eng", {
-            tessedit_pageseg_mode: "6",
-            preserve_interword_spaces: "1",
-          });
-          const pass2 = await Tesseract.recognize(prepared, "chi_tra+eng", {
-            tessedit_pageseg_mode: "11",
-            preserve_interword_spaces: "1",
-          });
-          const t1 = String(pass1?.data?.text || "").trim();
-          const t2 = String(pass2?.data?.text || "").trim();
-          const textOut = [t1, t2].filter(Boolean).join("\n").trim();
+          const passTexts = await runOcrMultiPass(Tesseract, img.dataUrl);
+          const textOut = passTexts.filter(Boolean).join("\n").trim();
           if (textOut) texts.push(textOut);
         }
 
