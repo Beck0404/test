@@ -89,12 +89,21 @@ function buildProductIndex(workbook) {
     for (let i = headerRowIdx + 1; i < raw.length; i++) {
       const row = raw[i];
       const pn = String(row[colMap["品號"]] || "").trim();
-      if (pn && !pn.startsWith("#") && pn !== "undefined" && !index[pn]) {
-        index[pn] = {
-          sheetName,
-          data: Object.fromEntries(Object.entries(colMap).map(([f, idx]) => [f, idx >= 0 ? String(row[idx] || "").trim() : ""])),
-        };
-        count += 1;
+      if (pn && !pn.startsWith("#") && pn !== "undefined") {
+        const rowData = Object.fromEntries(Object.entries(colMap).map(([f, idx]) => [f, idx >= 0 ? String(row[idx] || "").trim() : ""]));
+        if (!index[pn]) {
+          index[pn] = {
+            sheetName,
+            sheetNames: [sheetName],
+            data: rowData,
+          };
+          count += 1;
+        } else {
+          if (!index[pn].sheetNames.includes(sheetName)) index[pn].sheetNames.push(sheetName);
+          for (const [k, v] of Object.entries(rowData)) {
+            if (!index[pn].data[k] && v) index[pn].data[k] = v;
+          }
+        }
       }
     }
     if (count > 0) sheetSummary.push({ sheetName, count });
@@ -342,14 +351,22 @@ async function parsePptx(file) {
 }
 
 function compareWithDb(pkgDraft, dbRow) {
+  const fullText = String(pkgDraft["包裝全文"] || "");
+  const fullNorm = normalizeText(fullText);
   const rows = COMPARE_FIELDS.map((f) => {
-    const onPkg = pkgDraft[f.key] || "";
+    let onPkg = pkgDraft[f.key] || "";
     const inDb = dbRow?.data?.[f.key] || "";
-    const pkgNorm = normalizeText(onPkg);
+
+    if (!onPkg && inDb && fullNorm && fullNorm.includes(normalizeText(inDb))) {
+      onPkg = `【全文命中】${inDb}`;
+    }
+
+    const pkgNorm = normalizeText(onPkg.replace(/^【全文命中】/, ""));
     const dbNorm = normalizeText(inDb);
     const match = pkgNorm && dbNorm ? pkgNorm === dbNorm : null;
     let note = "";
-    if (match === false) note = "內容不一致";
+    if (String(onPkg).startsWith("【全文命中】")) note = "由包裝全文比對命中";
+    if (match === false && !note) note = "內容不一致";
     if (!pkgNorm && dbNorm) note = "包裝草稿未填";
     if (pkgNorm && !dbNorm) note = "總表無資料";
     return { key: f.key, field: f.label, onPkg, inDb, match, note };
@@ -521,6 +538,7 @@ function App() {
       成份: "",
       分析值: "",
       淨重: formData["淨重"] || formData["規格"] || "",
+      包裝全文: "",
     };
 
     const detectedPn = detectPnCandidates({ formData, allImages, productIndex, productName: initialDraft.品名 })[0] || "";
@@ -568,7 +586,7 @@ function App() {
         label: `商品${cleaned.length + 1}`,
         pn: "",
         imageIndices: [imgIdx],
-        pkgDraft: { 品號: "", 品名: "", 條碼: "", 成份: "", 分析值: "", 淨重: "" },
+        pkgDraft: { 品號: "", 品名: "", 條碼: "", 成份: "", 分析值: "", 淨重: "", 包裝全文: "" },
       });
       return cleaned;
     });
@@ -611,6 +629,7 @@ function App() {
           if (!isValidForField(f.key, cand)) return;
           if (!String(nextDraft[f.key] || "").trim()) nextDraft[f.key] = cand;
         });
+        nextDraft["包裝全文"] = mergedText;
         next[gi] = { ...g, pn: normalizePn(g.pn || guessed.品號), pkgDraft: nextDraft, ocrText: mergedText };
       }
       setGroups(next);
@@ -791,8 +810,7 @@ function App() {
           ))}
           <div className="actions">
             {stage === "grouping" && <button className="primary" onClick={goConfirm} disabled={ocrBusy}>{ocrBusy ? "OCR 辨識中..." : "下一步：自動OCR並確認文字"}</button>}
-            {stage === "confirm" && <button className="primary" onClick={runReview} disabled={ocrBusy}>執行法規檢核</button>}
-            {stage === "done" && <button className="ghost" onClick={() => setStage("confirm")}>返回文字確認</button>}
+                        {stage === "done" && <button className="ghost" onClick={() => setStage("confirm")}>返回文字確認</button>}
             {(ocrBusy || ocrMsg) && <p className="muted">{ocrMsg || "OCR 處理中..."}</p>}
           </div>
         </section>
@@ -801,7 +819,7 @@ function App() {
       {(stage === "confirm" || stage === "done") && (
         <section className="card">
           <h2>包裝擷取文字（人工確認草稿）</h2>
-          <p className="muted">系統會先自動 OCR 讀取你上傳的包裝圖片/PPT（含成份、分析值、淨重嘗試擷取），再請你人工覆核與修正。</p>
+          <p className="muted">系統會先自動 OCR 讀取你上傳的包裝圖片/PPT。你可直接編輯「包裝全文」，系統會再用欄位與全文一起比對。</p>
           {groups.map((g, gi) => (
             <div key={`draft-${g.id}`} className="resultCard">
               <h3>{g.label}</h3>
@@ -819,6 +837,14 @@ function App() {
                   <pre>{g.ocrText}</pre>
                 </details>
               )}
+              <label>
+                包裝全文（建議先確認這裡）
+                <textarea
+                  rows={6}
+                  value={g.pkgDraft?.["包裝全文"] || g.ocrText || ""}
+                  onChange={(e) => updateGroupDraft(gi, "包裝全文", e.target.value)}
+                />
+              </label>
               <div className="formGrid">
                 {COMPARE_FIELDS.map((f) => (
                   <label key={`${g.id}-${f.key}`}>
@@ -837,6 +863,11 @@ function App() {
               </div>
             </div>
           ))}
+          {stage === "confirm" && (
+            <div className="actions">
+              <button className="primary" onClick={runReview} disabled={ocrBusy}>執行法規檢核</button>
+            </div>
+          )}
         </section>
       )}
 
@@ -847,7 +878,7 @@ function App() {
             <div key={i} className="resultCard">
               <h3>{r.group.label}（{r.pn || "未填品號"}）</h3>
               <p>合規評分：<strong>{r.score}</strong> / 100</p>
-              <p>總表比對：{r.found ? `產品總表有此品號（分頁：${r.found.sheetName}）` : "產品總表查無此品號"}</p>
+              <p>總表比對：{r.found ? `產品總表有此品號（分頁：${(r.found.sheetNames || [r.found.sheetName]).join("、")}）` : "產品總表查無此品號"}</p>
 
               {r.missing.length > 0 && (
                 <ul>
