@@ -154,25 +154,62 @@ async function loadTesseract() {
   return _Tesseract;
 }
 
+function preprocessImageForOcr(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.max(1, Math.min(2, 1800 / Math.max(img.width, img.height)));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, w, h);
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const d = imageData.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const gray = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+        const v = gray > 168 ? 255 : gray < 70 ? 0 : gray;
+        d[i] = v;
+        d[i + 1] = v;
+        d[i + 2] = v;
+      }
+      ctx.putImageData(imageData, 0, 0);
+      resolve(c.toDataURL("image/png"));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
 function parseDraftFromOcr(rawText, fallbackName = "") {
   const text = String(rawText || "").split("\r").join("\n");
-  const lines = text.split("\n").map((x) => x.trim()).filter(Boolean);
+  const rawLines = text.split("\n").map((x) => x.trim()).filter(Boolean);
+  const lines = rawLines.map((line) => line.replace(/[｜|]/g, " ").replace(/\s+/g, " ").trim());
 
-  const pn = (text.match(/\b([A-Z]{1,5}\d{2,}[A-Z0-9-]{0,8})\b/i) || [])[1] || "";
+  const pnCandidate = (text.match(/\b([A-Z]{1,5}\d{2,}[A-Z0-9-]{0,8})\b/i) || [])[1] || "";
+  const pn = /[A-Z]/i.test(pnCandidate) && /\d/.test(pnCandidate) ? normalizePn(pnCandidate) : "";
   const barcode = (text.match(/\b(\d{8,14})\b/) || [])[1] || "";
 
-  let weight = (text.match(/(?:淨重|內容量|規格)\s*[:：]?\s*([^\n]{1,30})/) || [])[1] || "";
+  const findLine = (re) => lines.find((line) => re.test(line)) || "";
+
+  let weight = "";
+  const weightLine = findLine(/(?:淨重|內容量|規格)\s*[:：]?\s*\d+(?:\.\d+)?\s?(?:kg|g|mg|ml|l|公斤|公克|毫升)/i);
+  if (weightLine) {
+    const m = weightLine.match(/(?:淨重|內容量|規格)\s*[:：]?\s*(.*)$/i);
+    weight = (m?.[1] || weightLine).trim();
+  }
   if (!weight) {
-    const unitLine = lines.find((line) => /\b\d+(?:\.\d+)?\s?(?:kg|g|mg|ml|l|公斤|公克|毫升)\b/i.test(line));
-    weight = unitLine || "";
+    weight = findLine(/\b\d+(?:\.\d+)?\s?(?:kg|g|mg|ml|l|公斤|公克|毫升)\b/i);
   }
 
   let productName = "";
-  for (const line of lines.slice(0, 12)) {
-    if (line.length < 2 || line.length > 30) continue;
+  for (const line of lines.slice(0, 14)) {
+    if (line.length < 2 || line.length > 32) continue;
     if (/[:：]/.test(line)) continue;
     if (/\d{5,}/.test(line)) continue;
-    if (/(成分|成份|營養|分析|保存|注意事項|製造|產地|條碼|重量|淨重)/.test(line)) continue;
+    if (/(成分|成份|營養|分析|保存|注意事項|製造|產地|條碼|重量|淨重|內容量|規格)/.test(line)) continue;
     productName = line;
     break;
   }
@@ -183,7 +220,7 @@ function parseDraftFromOcr(rawText, fallbackName = "") {
     const picked = [];
     const inline = lines[idx].replace(headerRegex, "").replace(/^[：:\s]+/, "").trim();
     if (inline) picked.push(inline);
-    for (let i = idx + 1; i < Math.min(lines.length, idx + 8); i++) {
+    for (let i = idx + 1; i < Math.min(lines.length, idx + 14); i++) {
       const l = lines[i];
       if (!l) continue;
       if (stopRegex.test(l)) break;
@@ -192,16 +229,29 @@ function parseDraftFromOcr(rawText, fallbackName = "") {
     return picked.join(" ").replace(/\s{2,}/g, " ").trim();
   };
 
-  const ingredient = collectByHeader(/^(?:成分|成份|原料|主要原料)\s*[：:]?/i, /^(?:營養|分析|保證分析|淨重|內容量|保存|注意事項|製造|產地)/i);
-  const analysis = collectByHeader(/^(?:營養成分|分析值|保證分析|主要營養成分)\s*[：:]?/i, /^(?:成分|成份|原料|淨重|內容量|保存|注意事項|製造|產地)/i);
+  let ingredient = collectByHeader(
+    /(?:成分|成份|原料|主要原料|配方)\s*[：:]?/i,
+    /(?:營養|分析|保證分析|淨重|內容量|保存|注意事項|製造|產地|使用方式|餵食)/i,
+  );
+  if (!ingredient) {
+    ingredient = lines.filter((l) => /(雞|魚|肉|穀|玉米|脂|纖維|維生素|礦物質|添加物|原料)/.test(l)).slice(0, 4).join(" ");
+  }
+
+  let analysis = collectByHeader(
+    /(?:營養成分|分析值|保證分析|主要營養成分|營養分析)\s*[：:]?/i,
+    /(?:成分|成份|原料|淨重|內容量|保存|注意事項|製造|產地|餵食|使用方式)/i,
+  );
+  if (!analysis) {
+    analysis = lines.filter((l) => /(蛋白|脂肪|纖維|灰分|水分|鈣|磷|熱量|kcal|%|mg|g)/i.test(l)).slice(0, 6).join(" ");
+  }
 
   return {
-    品號: normalizePn(pn),
+    品號: pn,
     條碼: barcode,
     品名: productName || fallbackName,
     成份: ingredient,
     分析值: analysis,
-    淨重: weight.trim(),
+    淨重: (weight || "").trim(),
   };
 }
 
@@ -501,8 +551,13 @@ function App() {
           const img = allImages[imgIdx];
           if (!img?.dataUrl) continue;
           setOcrMsg(`OCR 辨識中：${g.label || `商品${gi + 1}`}（第 ${ii + 1}/${g.imageIndices.length} 張）`);
-          const result = await Tesseract.recognize(img.dataUrl, "chi_tra+eng");
-          texts.push(result?.data?.text || "");
+          const prepared = await preprocessImageForOcr(img.dataUrl);
+          const result = await Tesseract.recognize(prepared, "chi_tra+eng", {
+            tessedit_pageseg_mode: "6",
+            preserve_interword_spaces: "1",
+          });
+          const textOut = (result?.data?.text || "").trim();
+          if (textOut) texts.push(textOut);
         }
 
         const mergedText = texts.join("\n").trim();
