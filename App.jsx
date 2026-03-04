@@ -19,8 +19,8 @@ const COL_VARIANTS = {
   品號: ["品號", "產品編號", "品號 (productCode)", "貨 號", "貨號"],
   條碼: ["國條", "條  碼", "條碼(方便複製)", "亞馬遜條碼"],
   品名: ["產品名稱", "品名", "產品名稱 (productName)"],
-  成份: ["成分", "成份"],
-  分析值: ["營養成分及含量", "營養成分及含量(每100g含量)"],
+  成份: ["成分", "成份", "主要原料與添加物名稱", "主要原料", "原料"],
+  分析值: ["營養成分及含量", "營養成分及含量(每100g含量)", "主要營養成分及含量", "保證分析值"],
   淨重: ["規格(g/包(入); 包/袋) (KG/包) (g/罐; 罐/盒)", "內容量", "內容量(淨重KG ; 毛重KG)", "規格lb or oz/包(g)", "規格"],
 };
 
@@ -38,6 +38,10 @@ const storageApi = {
 
 function normalizeText(value) {
   return String(value || "").replace(/\s+/g, "").trim().toLowerCase();
+}
+
+function normalizePn(value) {
+  return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
 }
 
 function findCol(headers, variants) {
@@ -202,26 +206,72 @@ function detectPnCandidates({ formData, allImages, productIndex, productName }) 
   const candidates = new Set();
   const addIfPnLike = (text) => {
     if (!text) return;
-    const val = String(text).trim().toUpperCase();
-    if (/^[A-Z0-9-]{6,}$/.test(val)) candidates.add(val);
+    const val = normalizePn(text);
+    if (/^[A-Z0-9][A-Z0-9-]{2,}$/.test(val) && /[A-Z]/.test(val) && /\d/.test(val)) candidates.add(val);
   };
 
   addIfPnLike(formData["品號"] || formData["產品編號"] || formData["productCode"]);
 
   const allFormText = JSON.stringify(formData || {});
-  for (const m of allFormText.matchAll(/[A-Za-z0-9-]{6,}/g)) addIfPnLike(m[0]);
+  for (const m of allFormText.matchAll(/[A-Za-z0-9-]{3,}/g)) addIfPnLike(m[0]);
   for (const img of allImages || []) {
-    for (const m of String(img.name || "").matchAll(/[A-Za-z0-9-]{6,}/g)) addIfPnLike(m[0]);
+    for (const m of String(img.name || "").matchAll(/[A-Za-z0-9-]{3,}/g)) addIfPnLike(m[0]);
   }
 
   const normName = normalizeText(productName);
   if (normName) {
     for (const [pn, entry] of Object.entries(productIndex || {})) {
-      if (normalizeText(entry?.data?.品名) === normName) candidates.add(String(pn).toUpperCase());
+      if (normalizeText(entry?.data?.品名) === normName) candidates.add(normalizePn(pn));
     }
   }
 
   return [...candidates];
+}
+
+function createPnResolver(productIndex) {
+  const map = new Map();
+  Object.entries(productIndex || {}).forEach(([pn, entry]) => {
+    map.set(normalizePn(pn), entry);
+  });
+  return (pn) => map.get(normalizePn(pn)) || null;
+}
+
+function inferDraftFromDb({ formData, allImages, productIndex, getProductByPn }) {
+  const pnCandidates = detectPnCandidates({
+    formData,
+    allImages,
+    productIndex,
+    productName: formData["品名"] || formData["產品名稱"] || "",
+  });
+  for (const pn of pnCandidates) {
+    const row = getProductByPn(pn);
+    if (!row) continue;
+    return {
+      品號: pn,
+      品名: formData["品名"] || formData["產品名稱"] || row.data.品名 || "",
+      條碼: formData["條碼"] || row.data.條碼 || "",
+      成份: row.data.成份 || "",
+      分析值: row.data.分析值 || "",
+      淨重: formData["淨重"] || formData["規格"] || row.data.淨重 || "",
+    };
+  }
+
+  const context = `${JSON.stringify(formData || {})} ${(allImages || []).map((x) => x.name || "").join(" ")}`;
+  const contextNorm = normalizeText(context);
+  for (const [pn, row] of Object.entries(productIndex || {})) {
+    const nameNorm = normalizeText(row?.data?.品名);
+    if (nameNorm && contextNorm.includes(nameNorm)) {
+      return {
+        品號: normalizePn(pn),
+        品名: row.data.品名 || "",
+        條碼: row.data.條碼 || "",
+        成份: row.data.成份 || "",
+        分析值: row.data.分析值 || "",
+        淨重: row.data.淨重 || "",
+      };
+    }
+  }
+  return null;
 }
 
 function App() {
@@ -230,6 +280,7 @@ function App() {
   const [dbInit, setDbInit] = useState(false);
   const [productCount, setProductCount] = useState(0);
   const [productIndex, setProductIndex] = useState({});
+  const getProductByPn = createPnResolver(productIndex);
 
   const [allImages, setAllImages] = useState([]);
   const [formData, setFormData] = useState({});
@@ -333,6 +384,13 @@ function App() {
       淨重: formData["淨重"] || formData["規格"] || "",
     };
 
+    const inferred = inferDraftFromDb({ formData, allImages, productIndex, getProductByPn });
+    if (inferred) {
+      COMPARE_FIELDS.forEach((f) => {
+        if (!initialDraft[f.key] && inferred[f.key]) initialDraft[f.key] = inferred[f.key];
+      });
+    }
+
     const detectedPn = detectPnCandidates({ formData, allImages, productIndex, productName: initialDraft.品名 })[0] || "";
     if (!initialDraft.品號 && detectedPn) initialDraft.品號 = detectedPn;
 
@@ -341,7 +399,7 @@ function App() {
       {
         id: 0,
         label: initialDraft.品名 || "商品一",
-        pn: initialDraft.品號,
+        pn: normalizePn(initialDraft.品號),
         imageIndices: allImages.map((_, i) => i),
         pkgDraft: initialDraft,
       },
@@ -349,7 +407,12 @@ function App() {
     setStage("grouping");
   };
 
-  const updateGroup = (gid, patch) => setGroups((prev) => prev.map((g, i) => (i === gid ? { ...g, ...patch } : g)));
+  const updateGroup = (gid, patch) =>
+    setGroups((prev) =>
+      prev.map((g, i) =>
+        i === gid ? { ...g, ...patch, ...(patch.pn !== undefined ? { pn: normalizePn(patch.pn) } : {}) } : g,
+      ),
+    );
 
   const updateGroupDraft = (gid, key, value) => {
     setGroups((prev) => prev.map((g, i) => (i === gid ? { ...g, pkgDraft: { ...g.pkgDraft, [key]: value } } : g)));
@@ -359,8 +422,11 @@ function App() {
     setGroups((prev) =>
       prev.map((g, i) => {
         if (i !== gid) return g;
-        const found = g.pn ? productIndex[g.pn] : null;
-        if (!found) return g;
+        const found = g.pn ? getProductByPn(g.pn) : null;
+        if (!found) {
+          setErr(g.pn ? `品號 ${g.pn} 在總表中查無資料，無法補欄位。` : "請先輸入或自動抓到品號，再補入總表欄位。");
+          return g;
+        }
         const nextDraft = { ...g.pkgDraft };
         COMPARE_FIELDS.forEach((f) => {
           if (!nextDraft[f.key] && found.data[f.key]) nextDraft[f.key] = found.data[f.key];
@@ -374,12 +440,14 @@ function App() {
     setGroups((prev) => {
       const next = prev.map((g, i) => (i === gid ? { ...g, imageIndices: g.imageIndices.filter((x) => x !== imgIdx) } : g));
       const cleaned = next.filter((g) => g.imageIndices.length > 0);
+      const oneImage = [allImages[imgIdx]].filter(Boolean);
+      const inferred = inferDraftFromDb({ formData: {}, allImages: oneImage, productIndex, getProductByPn });
       cleaned.push({
         id: Date.now(),
-        label: `商品${cleaned.length + 1}`,
-        pn: "",
+        label: inferred?.品名 || `商品${cleaned.length + 1}`,
+        pn: inferred?.品號 || "",
         imageIndices: [imgIdx],
-        pkgDraft: { 品號: "", 品名: "", 條碼: "", 成份: "", 分析值: "", 淨重: "" },
+        pkgDraft: { 品號: inferred?.品號 || "", 品名: inferred?.品名 || "", 條碼: inferred?.條碼 || "", 成份: inferred?.成份 || "", 分析值: inferred?.分析值 || "", 淨重: inferred?.淨重 || "" },
       });
       return cleaned;
     });
@@ -401,7 +469,7 @@ function App() {
     }
 
     const output = groups.map((g) => {
-      let pn = g.pn || g.pkgDraft?.品號 || "";
+      let pn = normalizePn(g.pn || g.pkgDraft?.品號 || "");
       if (!pn) {
         pn =
           detectPnCandidates({
@@ -411,7 +479,7 @@ function App() {
             productName: g.pkgDraft?.品名 || g.label,
           })[0] || "";
       }
-      const found = pn ? productIndex[pn] : null;
+      const found = pn ? getProductByPn(pn) : null;
       const mergedDraft = { ...g.pkgDraft, 品號: pn };
       const comparison = compareWithDb(mergedDraft, found);
 
@@ -490,7 +558,7 @@ function App() {
                     onChange={(e) => {
                       const v = e.target.value;
                       updateGroup(gi, { pn: v });
-                      updateGroupDraft(gi, "品號", v);
+                      updateGroupDraft(gi, "品號", normalizePn(v));
                     }}
                   />
                 </label>
@@ -538,7 +606,7 @@ function App() {
                       onChange={(e) => {
                         const val = e.target.value;
                         if (f.key === "品號") updateGroup(gi, { pn: val });
-                        updateGroupDraft(gi, f.key, val);
+                        updateGroupDraft(gi, f.key, f.key === "品號" ? normalizePn(val) : val);
                       }}
                     />
                   </label>
