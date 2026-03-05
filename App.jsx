@@ -57,6 +57,46 @@ function findCol(headers, variants) {
   return null;
 }
 
+
+function chooseBetterFieldValue(field, currentValue, incomingValue) {
+  const a = String(currentValue || "").trim();
+  const b = String(incomingValue || "").trim();
+  if (!a) return b;
+  if (!b) return a;
+  if (normalizeText(a) === normalizeText(b)) return a.length >= b.length ? a : b;
+
+  if (field === "條碼") {
+    const aValid = isValidBarcodeDigits(a);
+    const bValid = isValidBarcodeDigits(b);
+    if (aValid !== bValid) return bValid ? b : a;
+    return b.length > a.length ? b : a;
+  }
+
+  if (field === "品號") {
+    const an = normalizePn(a);
+    const bn = normalizePn(b);
+    const aValid = isValidForField("品號", an);
+    const bValid = isValidForField("品號", bn);
+    if (aValid !== bValid) return bValid ? bn : an;
+    return bn.length > an.length ? bn : an;
+  }
+
+  const fieldPrefersLongText = ["成份", "分析值", "品名", "淨重"];
+  if (fieldPrefersLongText.includes(field)) {
+    return b.length > a.length ? b : a;
+  }
+
+  return a.length >= b.length ? a : b;
+}
+
+function mergeProductData(baseData = {}, incomingData = {}) {
+  const merged = { ...baseData };
+  for (const field of Object.keys(COL_VARIANTS)) {
+    merged[field] = chooseBetterFieldValue(field, merged[field], incomingData[field]);
+  }
+  return merged;
+}
+
 function buildProductIndex(workbook) {
   const index = {};
   const sheetSummary = [];
@@ -88,21 +128,24 @@ function buildProductIndex(workbook) {
     let count = 0;
     for (let i = headerRowIdx + 1; i < raw.length; i++) {
       const row = raw[i];
-      const pn = String(row[colMap["品號"]] || "").trim();
-      if (pn && !pn.startsWith("#") && pn !== "undefined") {
+      const rawPn = String(row[colMap["品號"]] || "").trim();
+      const pn = normalizePn(rawPn);
+      if (pn && !pn.startsWith("#") && pn !== "UNDEFINED") {
         const rowData = Object.fromEntries(Object.entries(colMap).map(([f, idx]) => [f, idx >= 0 ? String(row[idx] || "").trim() : ""]));
+        rowData["品號"] = pn;
         if (!index[pn]) {
           index[pn] = {
             sheetName,
             sheetNames: [sheetName],
+            rows: [{ sheetName, data: rowData }],
             data: rowData,
           };
           count += 1;
         } else {
           if (!index[pn].sheetNames.includes(sheetName)) index[pn].sheetNames.push(sheetName);
-          for (const [k, v] of Object.entries(rowData)) {
-            if (!index[pn].data[k] && v) index[pn].data[k] = v;
-          }
+          index[pn].rows = index[pn].rows || [];
+          index[pn].rows.push({ sheetName, data: rowData });
+          index[pn].data = mergeProductData(index[pn].data, rowData);
         }
       }
     }
@@ -497,18 +540,30 @@ function compareWithDb(pkgDraft, dbRow) {
   const rows = COMPARE_FIELDS.map((f) => {
     let onPkg = pkgDraft[f.key] || "";
     const inDb = dbRow?.data?.[f.key] || "";
+    const dbNorm = normalizeText(inDb);
+    const fullHit = !!(dbNorm && fullNorm && fullNorm.includes(dbNorm));
 
-    if (!onPkg && inDb && fullNorm && fullNorm.includes(normalizeText(inDb))) {
+    if ((!onPkg || !normalizeText(onPkg)) && fullHit) {
       onPkg = `【全文命中】${inDb}`;
     }
 
     const pkgNorm = normalizeText(onPkg.replace(/^【全文命中】/, ""));
-    const dbNorm = normalizeText(inDb);
-    const match = pkgNorm && dbNorm ? pkgNorm === dbNorm : null;
+    let match = pkgNorm && dbNorm ? pkgNorm === dbNorm : null;
     let note = "";
-    if (String(onPkg).startsWith("【全文命中】")) note = "由包裝全文比對命中";
+    if (fullHit && match !== true) {
+      match = true;
+      if (pkgNorm && dbNorm && pkgNorm !== dbNorm) {
+        note = "欄位拆分可能錯置，改由包裝全文命中判定";
+      } else {
+        note = "由包裝全文比對命中";
+      }
+      if (!String(onPkg).startsWith("【全文命中】")) onPkg = `【全文命中】${inDb}`;
+    } else if (String(onPkg).startsWith("【全文命中】")) {
+      note = "由包裝全文比對命中";
+    }
+
     if (match === false && !note) note = "內容不一致";
-    if (!pkgNorm && dbNorm) note = "包裝草稿未填";
+    if (!pkgNorm && dbNorm && !fullHit) note = "包裝草稿未填";
     if (pkgNorm && !dbNorm) note = "總表無資料";
     return { key: f.key, field: f.label, onPkg, inDb, match, note };
   });
@@ -977,7 +1032,7 @@ function App() {
       {(stage === "confirm" || stage === "done") && (
         <section className="card">
           <h2>包裝擷取文字（人工確認草稿）</h2>
-          <p className="muted">系統會先自動 OCR 讀取你上傳的包裝圖片/PPT。你可直接編輯「包裝全文」，系統會再用欄位與全文一起比對。</p>
+          <p className="muted">系統會先自動 OCR 讀取你上傳的包裝圖片/PPT。若欄位被錯拆，可直接把內容集中在「包裝全文」單一大欄位，系統會優先用全文命中比對。</p>
           {groups.map((g, gi) => (
             <div key={`draft-${g.id}`} className="resultCard">
               <h3>{g.label}</h3>
