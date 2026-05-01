@@ -2,51 +2,323 @@
 <html lang="zh-Hant">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>寵物食品包裝校稿系統</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0604" />
+    <title>密室逃脫 · 古書房之謎</title>
     <style>
-      body { margin: 0; background: #f5f0e8; color: #1f2937; font-family: 'Noto Sans TC', sans-serif; }
-      .container { max-width: 980px; margin: 0 auto; padding: 24px 16px 40px; }
-      h1 { margin: 0 0 8px; font-size: 28px; color: #1a3318; }
-      .muted { color: #6b7280; margin-bottom: 16px; }
-      .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.08); padding: 16px; margin-bottom: 14px; }
-      .card h2 { margin: 0 0 10px; font-size: 18px; color: #1a3318; }
-      .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(140px,1fr)); margin-top: 12px; }
-      .thumb { margin: 0; background: #f8fafc; border-radius: 8px; overflow: hidden; border: 1px solid #e5e7eb; }
-      .thumb img { width: 100%; height: 100px; object-fit: cover; display: block; }
-      .thumb figcaption { font-size: 12px; padding: 6px 8px; color: #4b5563; }
-      pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.6; background: #f8fafc; border-radius: 8px; padding: 10px; }
-      .error { color: #dc2626; font-weight: 600; }
-      .actions { margin-top: 12px; }
-      button { border: none; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
-      .primary { background: #2d5a27; color: #fff; font-weight: 700; }
-      .danger { background: #dc2626; color: #fff; font-size: 11px; margin-left: 8px; padding: 3px 6px; }
-      .ghost { background: #e5e7eb; color: #1f2937; font-size: 11px; margin-left: 8px; padding: 3px 6px; }
-      .groupCard { border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; margin-bottom: 10px; }
-      .groupHead { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
-      .groupHead input { border: 1px solid #d1d5db; border-radius: 6px; padding: 4px 8px; }
-      .thumb.selected { border-color: #4a8c41; }
-      .ok { color: #166534; font-weight: 600; }
-      .warn { color: #b45309; font-weight: 600; }
-      .flowList { margin: 0; padding-left: 20px; color: #374151; line-height: 1.7; font-size: 13px; }
-      .resultCard { border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; margin-bottom: 10px; background: #fff; }
-      .resultCard h3 { margin: 0 0 8px; color: #1a3318; }
-      .resultCard p { margin: 6px 0; }
-      .resultCard ul { margin: 6px 0 0 18px; }
-      .formGrid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); }
-      .formGrid label { font-size: 12px; color: #374151; display: flex; flex-direction: column; gap: 4px; }
-      .formGrid textarea { width: 100%; border: 1px solid #d1d5db; border-radius: 6px; padding: 6px 8px; font-size: 12px; resize: vertical; }
-      .cmpTable { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
-      .cmpTable th, .cmpTable td { border: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; vertical-align: top; }
-      .cmpTable thead { background: #f9fafb; }
-      .diffSummary { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; font-size: 12px; }
-      .diffSummary span { background: #f3f4f6; border-radius: 999px; padding: 4px 8px; }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body {
+        margin: 0; padding: 0; height: 100%; overflow: hidden;
+        overscroll-behavior: none;
+      }
+      body {
+        background: #050302;
+        color: #e8dcc4;
+        font-family: 'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', sans-serif;
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: manipulation;
+      }
+      #root {
+        height: 100%;
+        max-width: 480px;
+        margin: 0 auto;
+        position: relative;
+        background: #0a0604;
+        box-shadow: 0 0 60px rgba(0,0,0,0.8);
+      }
 
+      /* ===== 開場/結尾畫面 ===== */
+      .full-screen {
+        position: absolute; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        text-align: center;
+        padding: 24px;
+        background: radial-gradient(ellipse at center, #1a130d 0%, #050302 100%);
+      }
+      .full-screen .content { max-width: 360px; width: 100%; }
+      .deco {
+        font-size: 64px; margin-bottom: 18px;
+        filter: drop-shadow(0 0 24px rgba(255,200,100,0.6));
+      }
+      .full-screen h1 {
+        font-size: 30px; margin: 0 0 6px;
+        color: #daa520; letter-spacing: 8px;
+        text-shadow: 0 2px 12px rgba(218,165,32,0.4);
+      }
+      .full-screen h2 {
+        font-size: 13px; margin: 0 0 24px;
+        color: #806040; font-weight: normal; letter-spacing: 4px;
+      }
+      .full-screen p {
+        line-height: 1.9; color: #c4b497; margin: 0 0 28px;
+        font-size: 14px;
+      }
+      .tip { font-size: 11px; color: #5b3a22; margin-top: 18px !important; letter-spacing: 1px; }
 
+      .primary-btn {
+        background: linear-gradient(180deg, #daa520, #a07810);
+        color: #1a130d;
+        border: 2px solid #5b3a22;
+        border-radius: 10px;
+        padding: 13px 36px;
+        font-size: 15px; font-weight: 700;
+        cursor: pointer;
+        letter-spacing: 4px;
+        box-shadow: 0 4px 0 #3d2613, 0 8px 18px rgba(0,0,0,0.6);
+        font-family: inherit;
+      }
+      .primary-btn:active {
+        transform: translateY(2px);
+        box-shadow: 0 2px 0 #3d2613, 0 4px 10px rgba(0,0,0,0.6);
+      }
+      .ghost-btn {
+        background: transparent; color: #a08060;
+        border: 1px solid #5b3a22; border-radius: 6px;
+        padding: 8px 18px; cursor: pointer;
+        font-family: inherit; font-size: 13px;
+        letter-spacing: 2px;
+      }
+      .ghost-btn:active { background: #2a1808; }
+
+      /* ===== 遊戲畫面 ===== */
+      .game-screen {
+        height: 100%;
+        display: flex; flex-direction: column;
+        background: #0a0604;
+      }
+      .game-header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 12px 16px;
+        background: linear-gradient(180deg, #1a130d 0%, #0a0604 100%);
+        border-bottom: 1px solid #3d2410;
+      }
+      .dir-label {
+        color: #daa520; font-size: 14px; letter-spacing: 4px;
+        flex: 1; text-align: center;
+      }
+      .help-btn {
+        width: 30px; height: 30px;
+        background: #2a1808;
+        border: 1px solid #5b3a22;
+        border-radius: 50%;
+        color: #daa520;
+        font-size: 14px; font-weight: bold;
+        cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        font-family: inherit;
+      }
+      .help-btn:active { background: #5b3a22; }
+
+      .scene-container {
+        flex: 1; position: relative; overflow: hidden;
+        background: #0a0604;
+      }
+      .scene-svg {
+        width: 100%; height: 100%; display: block;
+      }
+      .clickable { cursor: pointer; }
+      .clickable * { transition: filter 0.15s; }
+      .clickable:active * { filter: brightness(1.4); }
+      .glow-hint {
+        animation: pulseGlow 2s ease-in-out infinite;
+      }
+      @keyframes pulseGlow {
+        0%, 100% { filter: drop-shadow(0 0 0 rgba(255,200,100,0)); }
+        50% { filter: drop-shadow(0 0 6px rgba(255,200,100,0.7)); }
+      }
+
+      /* ===== 導航列 ===== */
+      .nav-bar {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 8px 12px;
+        background: #1a130d;
+        border-top: 1px solid #3d2410;
+      }
+      .nav-btn {
+        background: #3d2410; color: #daa520;
+        border: 1px solid #5b3a22;
+        border-radius: 6px;
+        padding: 9px 14px;
+        font-size: 13px;
+        cursor: pointer;
+        letter-spacing: 2px;
+        font-family: inherit;
+      }
+      .nav-btn:active { background: #5b3a22; }
+      .compass {
+        font-size: 18px; color: #daa520; font-weight: bold;
+        width: 40px; height: 40px;
+        border: 2px solid #5b3a22; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        background: #0a0604;
+        box-shadow: inset 0 0 8px rgba(0,0,0,0.6);
+      }
+
+      /* ===== 背包 ===== */
+      .inventory {
+        background: linear-gradient(180deg, #1a130d, #0a0604);
+        border-top: 2px solid #3d2410;
+        padding: 8px 12px 10px;
+        min-height: 90px;
+      }
+      .inv-label {
+        color: #806040; font-size: 11px;
+        margin-bottom: 6px; letter-spacing: 4px;
+        display: flex; justify-content: space-between; align-items: center;
+      }
+      .inv-hint {
+        color: #5b3a22; font-size: 10px; letter-spacing: 1px;
+      }
+      .inv-items {
+        display: flex; gap: 8px; overflow-x: auto;
+        padding: 2px;
+      }
+      .inv-empty {
+        color: #5b3a22; font-size: 12px; font-style: italic;
+        padding: 14px 8px; width: 100%; text-align: center;
+        letter-spacing: 2px;
+      }
+      .inv-item {
+        flex-shrink: 0;
+        display: flex; flex-direction: column; align-items: center;
+        background: #2a1808;
+        border: 2px solid #5b3a22;
+        border-radius: 8px;
+        padding: 6px 10px;
+        min-width: 64px;
+        cursor: pointer;
+        color: #daa520;
+        font-family: inherit;
+      }
+      .inv-item.selected {
+        background: linear-gradient(180deg, #daa520, #a07810);
+        color: #1a130d;
+        border-color: #ffe7a3;
+        box-shadow: 0 0 12px rgba(255,200,100,0.5);
+      }
+      .inv-icon { font-size: 24px; line-height: 1; }
+      .inv-name { font-size: 10px; margin-top: 4px; letter-spacing: 1px; }
+
+      /* ===== 對話框 ===== */
+      .modal-overlay {
+        position: fixed; inset: 0;
+        background: rgba(0,0,0,0.78);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 100;
+        padding: 20px;
+        animation: fadeIn 0.2s ease;
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      .modal {
+        background: linear-gradient(180deg, #2a1808 0%, #1a130d 100%);
+        border: 2px solid #daa520;
+        border-radius: 12px;
+        padding: 22px 22px 18px;
+        max-width: 360px; width: 100%;
+        box-shadow: 0 0 40px rgba(218,165,32,0.25), inset 0 0 20px rgba(0,0,0,0.5);
+        animation: scaleIn 0.25s ease;
+      }
+      @keyframes scaleIn {
+        from { transform: scale(0.92); opacity: 0; }
+        to { transform: scale(1); opacity: 1; }
+      }
+      .modal h3 {
+        color: #daa520;
+        margin: 0 0 14px;
+        font-size: 18px;
+        letter-spacing: 3px;
+        text-align: center;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #3d2410;
+      }
+      .modal p {
+        color: #e8dcc4;
+        font-size: 14px;
+        line-height: 1.8;
+        margin: 0 0 14px;
+        white-space: pre-wrap;
+      }
+      .modal-actions {
+        display: flex; gap: 10px; justify-content: flex-end;
+        margin-top: 8px;
+      }
+
+      /* ===== 密碼鎖 ===== */
+      .keypad-modal { max-width: 300px; }
+      .code-display {
+        display: flex; gap: 10px; justify-content: center;
+        margin: 14px 0 6px;
+      }
+      .code-digit {
+        width: 44px; height: 54px;
+        background: #050302;
+        border: 2px solid #5b3a22;
+        border-radius: 6px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 26px; color: #daa520;
+        font-weight: bold;
+      }
+      .code-digit.error { border-color: #dc2626; color: #dc2626; animation: shake 0.4s; }
+      @keyframes shake {
+        0%, 100% { transform: translateX(0); }
+        25% { transform: translateX(-4px); }
+        75% { transform: translateX(4px); }
+      }
+      .err-msg { color: #dc2626; text-align: center; margin: 8px 0 0; font-size: 12px; min-height: 16px; }
+      .hint-text {
+        color: #a08060; font-size: 12px; text-align: center;
+        font-style: italic; margin: 0 0 8px;
+      }
+      .keypad-grid {
+        display: grid; grid-template-columns: repeat(3, 1fr);
+        gap: 8px; margin: 14px 0 10px;
+      }
+      .key-btn {
+        background: #3d2410;
+        color: #daa520;
+        border: 1px solid #5b3a22;
+        border-radius: 8px;
+        padding: 14px 0;
+        font-size: 20px;
+        cursor: pointer;
+        font-weight: bold;
+        font-family: inherit;
+      }
+      .key-btn:active { background: #5b3a22; transform: translateY(1px); }
+      .key-btn.small { font-size: 13px; letter-spacing: 1px; }
+      .key-btn.confirm { background: linear-gradient(180deg, #daa520, #a07810); color: #1a130d; }
+
+      /* ===== 提示彈跳 ===== */
+      .toast {
+        position: fixed;
+        top: 70px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(20, 14, 9, 0.96);
+        border: 1px solid #daa520;
+        color: #daa520;
+        padding: 10px 22px;
+        border-radius: 8px;
+        font-size: 13px;
+        z-index: 200;
+        white-space: nowrap;
+        pointer-events: none;
+        letter-spacing: 1px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+        animation: toastFade 2.4s ease forwards;
+      }
+      @keyframes toastFade {
+        0% { opacity: 0; transform: translate(-50%, -10px); }
+        12% { opacity: 1; transform: translate(-50%, 0); }
+        88% { opacity: 1; transform: translate(-50%, 0); }
+        100% { opacity: 0; transform: translate(-50%, -10px); }
+      }
     </style>
 
-    <!-- Runtime dependencies for App.jsx -->
-    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -54,7 +326,6 @@
   <body>
     <div id="root"></div>
 
-    <!-- Load JSX file directly via Babel -->
     <script type="text/babel" data-presets="react" src="./App.jsx"></script>
     <script type="text/babel" data-presets="react">
       const root = ReactDOM.createRoot(document.getElementById('root'));
